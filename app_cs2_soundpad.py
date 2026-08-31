@@ -2,6 +2,7 @@ import customtkinter as ctk
 from tkinter import messagebox, filedialog
 import threading
 import os
+import sys
 import subprocess
 from flask import Flask, request
 import logging
@@ -17,6 +18,14 @@ kills_anteriores = 0
 kills_objetivo = 1
 indice_audio = 1
 ruta_soundpad = r"C:\Program Files (x86)\Steam\steamapps\common\Soundpad\Soundpad.exe"
+
+def resource_path(relative_path):
+    """ Obtiene la ruta absoluta al recurso, compatible con PyInstaller --onefile """
+    try:
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+    return os.path.join(base_path, relative_path)
 
 def reproducir_sonido():
     try:
@@ -54,6 +63,12 @@ class Aplicacion(ctk.CTk):
         self.title("CS2 Soundpad Auto-Caster")
         self.geometry("400x550")
         self.resizable(False, False)
+        
+        # --- CARGAR ICONO DE LA VENTANA ---
+        try:
+            self.iconbitmap(resource_path("app_icon.ico"))
+        except Exception as e:
+            print("No se pudo cargar el icono de la ventana:", e)
         
         # --- HEADER ---
         self.header_frame = ctk.CTkFrame(self, fg_color="transparent")
