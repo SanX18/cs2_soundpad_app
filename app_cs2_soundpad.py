@@ -12,7 +12,7 @@ from flask import Flask, request
 import logging
 from datetime import datetime
 
-CURRENT_VERSION = "v1.6.3"
+CURRENT_VERSION = "v1.6.4"
 REPO = "SanX18/cs2_soundpad_app"
 
 appdata = os.environ.get('APPDATA')
@@ -67,7 +67,12 @@ def recibir_datos():
             kills_anteriores = kills_actuales
             log_msg(f"📡 Conectado con CS2. Kills actuales: {kills_actuales}")
             
-        if kills_actuales > kills_anteriores:
+        # FIX: Detectar si el usuario reinicia el mapa o la partida (los kills bajan a 0)
+        if kills_actuales < kills_anteriores:
+            log_msg(f"🔄 Reinicio de mapa detectado. Reseteando contador a {kills_actuales} kills.")
+            kills_anteriores = kills_actuales
+            
+        elif kills_actuales > kills_anteriores:
             log_msg(f"💥 ¡Baja detectada! Kills totales: {kills_actuales}")
             
             if reglas_activas:
@@ -260,7 +265,6 @@ class Aplicacion(ctk.CTk):
             response = requests.get(download_url, stream=True)
             response.raise_for_status()
             
-            # Usar carpeta temporal real del sistema para evitar errores de permisos locales
             temp_dir = tempfile.gettempdir()
             temp_exe = os.path.join(temp_dir, f"cs2_update_{int(time.time())}.exe")
             bat_path = os.path.join(temp_dir, "updater_cs2.bat")
@@ -277,7 +281,6 @@ class Aplicacion(ctk.CTk):
                 return
 
             my_exe = sys.executable
-            self.escribir_log(f"🎯 Archivo destino a reemplazar: {my_exe}")
             
             bat_content = f"""@echo off\ntimeout /t 2 /nobreak > NUL\ndel "{my_exe}"\ncopy /y "{temp_exe}" "{my_exe}"\nexplorer "{my_exe}"\ndel "%~f0"\n"""
             with open(bat_path, "w") as f:
