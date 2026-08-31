@@ -4,9 +4,13 @@ import threading
 import os
 import sys
 import subprocess
+import requests
 from flask import Flask, request
 import logging
 from datetime import datetime
+
+CURRENT_VERSION = "v1.5.0"
+REPO = "SanX18/cs2_soundpad_app"
 
 log = logging.getLogger('werkzeug')
 log.setLevel(logging.ERROR)
@@ -70,14 +74,33 @@ def ejecutar_servidor():
     log_msg("✅ Servidor escuchando en puerto 3000.")
     servidor_flask.run(port=3000)
 
+def comprobar_actualizaciones():
+    try:
+        log_msg("🔍 Comprobando si hay actualizaciones...")
+        response = requests.get(f"https://api.github.com/repos/{REPO}/releases/latest", timeout=5)
+        response.raise_for_status()
+        data = response.json()
+        latest_version = data.get("tag_name")
+        
+        if latest_version and latest_version != CURRENT_VERSION:
+            if latest_version > CURRENT_VERSION:
+                log_msg(f"✨ ¡Nueva versión encontrada! ({latest_version})")
+                app_instance.after(1000, lambda: app_instance.preguntar_actualizacion(data))
+            else:
+                log_msg("✅ Tienes la última versión.")
+        else:
+            log_msg("✅ Tienes la última versión.")
+    except Exception as e:
+        log_msg(f"⚠️ No se pudo comprobar actualizaciones: {e}")
+
 class Aplicacion(ctk.CTk):
     def __init__(self):
         super().__init__()
         global app_instance
         app_instance = self
         
-        self.title("CS2 Soundpad Auto-Caster")
-        self.geometry("450x680")
+        self.title(f"CS2 Soundpad Auto-Caster {CURRENT_VERSION}")
+        self.geometry("460x720")
         self.resizable(False, False)
         
         try:
@@ -93,9 +116,9 @@ class Aplicacion(ctk.CTk):
         self.lbl_subtitle.pack()
         
         self.settings_frame = ctk.CTkFrame(self)
-        self.settings_frame.pack(pady=10, padx=20, fill="both")
+        self.settings_frame.pack(pady=10, padx=15, fill="both")
         
-        # --- TABLA DE REGLAS ---
+        # --- TABLA DE REGLAS (5 FILAS) ---
         self.rows_frame = ctk.CTkFrame(self.settings_frame, fg_color="transparent")
         self.rows_frame.pack(fill="x", pady=10, padx=10)
         
@@ -104,9 +127,10 @@ class Aplicacion(ctk.CTk):
         ctk.CTkLabel(self.rows_frame, text="Nº Audio", width=90, font=ctk.CTkFont(weight="bold")).grid(row=0, column=2, padx=5)
         
         self.rule_entries = []
-        for i in range(4):
+        for i in range(5):
             ek = ctk.CTkEntry(self.rows_frame, width=90, justify="center", placeholder_text="-")
             ek.grid(row=i+1, column=0, padx=5, pady=3)
+            ek.insert(0, str(i+1)) # Pre-fill 1 to 5
             
             ec = ctk.CTkEntry(self.rows_frame, width=90, justify="center", placeholder_text="(Opcional)")
             ec.grid(row=i+1, column=1, padx=5, pady=3)
@@ -115,9 +139,6 @@ class Aplicacion(ctk.CTk):
             ea.grid(row=i+1, column=2, padx=5, pady=3)
             
             self.rule_entries.append((ek, ec, ea))
-            
-        self.rule_entries[0][0].insert(0, "2")
-        self.rule_entries[0][2].insert(0, "1")
         
         # --- RUTA SOUNDPAD ---
         self.lbl_ruta = ctk.CTkLabel(self.settings_frame, text="📂 Ruta de Soundpad.exe:", font=ctk.CTkFont(weight="bold"))
@@ -138,11 +159,14 @@ class Aplicacion(ctk.CTk):
         self.btn_iniciar.pack(pady=5, padx=40, fill="x")
         
         # --- LOGS BOX ---
-        self.log_box = ctk.CTkTextbox(self, height=130, state="disabled", font=ctk.CTkFont(size=11, family="Consolas"))
-        self.log_box.pack(pady=10, padx=20, fill="both", expand=True)
-        self.escribir_log("Aplicación v1.4 lista.")
+        self.log_box = ctk.CTkTextbox(self, height=120, state="disabled", font=ctk.CTkFont(size=11, family="Consolas"))
+        self.log_box.pack(pady=10, padx=15, fill="both", expand=True)
+        self.escribir_log(f"Aplicación {CURRENT_VERSION} lista.")
         
         self.servidor_iniciado = False
+        
+        # Iniciar comprobación de actualizaciones de fondo
+        threading.Thread(target=comprobar_actualizaciones, daemon=True).start()
 
     def escribir_log(self, mensaje):
         hora = datetime.now().strftime("%H:%M:%S")
@@ -150,6 +174,50 @@ class Aplicacion(ctk.CTk):
         self.log_box.insert("end", f"[{hora}] {mensaje}\n")
         self.log_box.see("end")
         self.log_box.configure(state="disabled")
+
+    def preguntar_actualizacion(self, release_data):
+        latest_version = release_data.get("tag_name")
+        assets = release_data.get("assets", [])
+        download_url = None
+        for asset in assets:
+            if asset["name"].endswith(".exe"):
+                download_url = asset["browser_download_url"]
+                break
+                
+        if not download_url:
+            return
+            
+        respuesta = messagebox.askyesno("¡Nueva Actualización!", f"Se ha encontrado la versión {latest_version}.\n\n¿Quieres descargarla e instalarla automáticamente ahora?")
+        if respuesta:
+            threading.Thread(target=self.realizar_actualizacion, args=(download_url,), daemon=True).start()
+
+    def realizar_actualizacion(self, download_url):
+        try:
+            self.escribir_log("⬇️ Descargando actualización...")
+            response = requests.get(download_url, stream=True)
+            response.raise_for_status()
+            
+            temp_exe = "update_temp.exe"
+            with open(temp_exe, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    f.write(chunk)
+            
+            self.escribir_log("✅ Descarga completada. Reiniciando...")
+            
+            if not getattr(sys, 'frozen', False):
+                self.escribir_log("⚠️ Modo desarrollador: La actualización automática solo funciona en el .exe compilado.")
+                return
+
+            current_exe = os.path.basename(sys.executable)
+            bat_content = f"""@echo off\ntimeout /t 2 /nobreak > NUL\ndel "{current_exe}"\nren "{temp_exe}" "{current_exe}"\nstart "" "{current_exe}"\ndel "%~f0"\n"""
+            with open("updater.bat", "w") as f:
+                f.write(bat_content)
+                
+            subprocess.Popen("updater.bat", shell=True)
+            sys.exit(0)
+            
+        except Exception as e:
+            self.escribir_log(f"❌ Error al actualizar: {e}")
 
     def buscar_soundpad(self):
         ruta = filedialog.askopenfilename(title="Selecciona Soundpad.exe", filetypes=[("Ejecutables", "*.exe")])
@@ -195,7 +263,6 @@ class Aplicacion(ctk.CTk):
             self.escribir_log("❌ Error: Tienes que rellenar al menos una regla válida.")
             return
             
-        # Ordenar reglas de mayor a menor kills para la prioridad del módulo (%)
         nuevas_reglas.sort(key=lambda x: x['kills'], reverse=True)
         reglas_activas = nuevas_reglas
         
