@@ -10,7 +10,7 @@ from flask import Flask, request
 import logging
 from datetime import datetime
 
-CURRENT_VERSION = "v1.6.1"
+CURRENT_VERSION = "v1.6.2"
 REPO = "SanX18/cs2_soundpad_app"
 
 appdata = os.environ.get('APPDATA')
@@ -68,12 +68,18 @@ def recibir_datos():
         if kills_actuales > kills_anteriores:
             log_msg(f"💥 ¡Baja detectada! Kills totales: {kills_actuales}")
             
-            for regla in reglas_activas:
-                if kills_actuales % regla['kills'] == 0:
-                    log_msg(f"🎯 Regla de {regla['kills']} kills activada.")
-                    reproducir_sonido(regla['folder'], regla['audio'])
-                    break
-                    
+            if reglas_activas:
+                max_kills_ciclo = max(r['kills'] for r in reglas_activas)
+                kill_en_ciclo = ((kills_actuales - 1) % max_kills_ciclo) + 1
+                
+                log_msg(f"🔄 Posición en el ciclo de rachas (1-{max_kills_ciclo}): Baja nº {kill_en_ciclo}")
+                
+                for regla in reglas_activas:
+                    if kill_en_ciclo == regla['kills']:
+                        log_msg(f"🎯 Activando sonido para la baja {regla['kills']}.")
+                        reproducir_sonido(regla['folder'], regla['audio'])
+                        break
+                        
             kills_anteriores = kills_actuales
     return 'OK', 200
 
@@ -106,7 +112,6 @@ class Aplicacion(ctk.CTk):
         global app_instance
         app_instance = self
         
-        # Limpiar archivos residuales del updater
         if os.path.exists("updater.bat"):
             try: os.remove("updater.bat")
             except: pass
@@ -133,7 +138,6 @@ class Aplicacion(ctk.CTk):
         self.settings_frame = ctk.CTkFrame(self)
         self.settings_frame.pack(pady=10, padx=15, fill="both")
         
-        # --- TABLA DE REGLAS ---
         self.rows_frame = ctk.CTkFrame(self.settings_frame, fg_color="transparent")
         self.rows_frame.pack(fill="x", pady=10, padx=10)
         
@@ -155,7 +159,6 @@ class Aplicacion(ctk.CTk):
             
             self.rule_entries.append((ek, ec, ea))
         
-        # --- RUTA SOUNDPAD ---
         self.lbl_ruta = ctk.CTkLabel(self.settings_frame, text="📂 Ruta de Soundpad.exe:", font=ctk.CTkFont(weight="bold"))
         self.lbl_ruta.pack()
         self.ruta_frame = ctk.CTkFrame(self.settings_frame, fg_color="transparent")
@@ -166,24 +169,20 @@ class Aplicacion(ctk.CTk):
         self.btn_buscar = ctk.CTkButton(self.ruta_frame, text="📁", width=40, command=self.buscar_soundpad)
         self.btn_buscar.pack(side="right")
 
-        # --- ACTIONS ---
         self.btn_cfg = ctk.CTkButton(self, text="⚙️ 1. Instalar CFG en CS2", fg_color="#d35400", hover_color="#e67e22", command=self.instalar_cfg)
         self.btn_cfg.pack(pady=(5, 5), padx=40, fill="x")
         
         self.btn_iniciar = ctk.CTkButton(self, text="🚀 2. INICIAR / GUARDAR", fg_color="#27ae60", hover_color="#2ecc71", font=ctk.CTkFont(size=14, weight="bold"), command=self.iniciar_app)
         self.btn_iniciar.pack(pady=5, padx=40, fill="x")
         
-        # --- LOGS BOX ---
         self.log_box = ctk.CTkTextbox(self, height=120, state="disabled", font=ctk.CTkFont(size=11, family="Consolas"))
         self.log_box.pack(pady=10, padx=15, fill="both", expand=True)
         self.escribir_log(f"Aplicación {CURRENT_VERSION} lista.")
         
         self.servidor_iniciado = False
         
-        # Cargar configuración guardada
         self.cargar_config()
         
-        # Iniciar comprobación de actualizaciones de fondo
         threading.Thread(target=comprobar_actualizaciones, daemon=True).start()
 
     def escribir_log(self, mensaje):
@@ -278,8 +277,6 @@ class Aplicacion(ctk.CTk):
                 return
 
             current_exe = os.path.basename(sys.executable)
-            
-            # Use explorer.exe to prevent PyInstaller parent-process security errors
             bat_content = f"""@echo off\ntimeout /t 2 /nobreak > NUL\ndel "{current_exe}"\nren "{temp_exe}" "{current_exe}"\nexplorer "{current_exe}"\n"""
             with open("updater.bat", "w") as f:
                 f.write(bat_content)
@@ -337,7 +334,6 @@ class Aplicacion(ctk.CTk):
         nuevas_reglas.sort(key=lambda x: x['kills'], reverse=True)
         reglas_activas = nuevas_reglas
         
-        # GUARDAR LA CONFIGURACIÓN DEL USUARIO
         self.guardar_config()
         
         self.escribir_log(f"✅ {len(reglas_activas)} reglas cargadas.")
