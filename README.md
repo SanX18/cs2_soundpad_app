@@ -14,13 +14,22 @@ This project is **completely safe, legal, and will NOT cause VAC or VACNet bans*
 * **Counter-Strike 2**
 * **Soundpad** (You **MUST** have the Soundpad application installed, available on Steam or their official website).
 
+## 🛑 Antivirus & SmartScreen False Positive Disclaimer
+When downloading or running the `.exe` file, your browser (Chrome/Edge) or Windows Defender might flag it as a virus or block the execution (e.g., showing a blue SmartScreen warning). 
+
+**This is a common "False Positive"** that happens because:
+1. The executable is compiled using `PyInstaller`, a python compiler tool whose wrappers are frequently flagged by security heuristics.
+2. The executable does not have a paid digital signature/certificate.
+
+The source code is 100% public and open-source in this repository. If you receive a warning, simply click **"Keep anyway"** in your browser, or **"More info" -> "Run anyway"** in Windows SmartScreen. Alternatively, you can run the Python script directly from the source code!
+
 ## 🚀 Features
 * Easy-to-use graphical interface.
 * 1-Click auto-installation of the GSI `.cfg` file into your CS2 folder.
 * Runs lightweight in the background.
 
 ## ⚙️ How to Use (For Users)
-1. Go to the **Releases** tab on the right side of this repository and download `app_cs2_soundpad.exe`.
+1. Go to the **Releases** tab on the right side of this repository and download the latest `.exe` file.
 2. Open the application.
 3. Click **"1. Instalar CFG en CS2"** and select your CS2 `cfg` folder (usually located at `C:\Program Files (x86)\Steam\steamapps\common\Counter-Strike Global Offensive\game\csgo\cfg`).
 4. Set the number of kills required to trigger the sound.
@@ -31,10 +40,10 @@ This project is **completely safe, legal, and will NOT cause VAC or VACNet bans*
 ## 🛠️ For Developers (Source Code)
 If you want to run the python script yourself:
 ```bash
-pip install flask
+pip install flask customtkinter
 python app_cs2_soundpad.py
 ```
 To compile it into an executable:
 ```bash
-pyinstaller --noconsole --onefile app_cs2_soundpad.py
+pyinstaller --noconsole --onefile --icon=app_icon.ico --add-data "app_icon.ico;." --name="CS2_Soundpad_Caster" app_cs2_soundpad.py
 ```
