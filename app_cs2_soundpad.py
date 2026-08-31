@@ -1,4 +1,4 @@
-import tkinter as tk
+import customtkinter as ctk
 from tkinter import messagebox, filedialog
 import threading
 import os
@@ -22,7 +22,6 @@ def reproducir_sonido():
     try:
         comando = f'"{ruta_soundpad}" -rc "DoPlaySound({indice_audio})"'
         subprocess.Popen(comando, shell=True)
-        print("Sonido reproducido en Soundpad.")
     except Exception as e:
         print(f"Error al reproducir: {e}")
 
@@ -44,47 +43,76 @@ def recibir_datos():
 def ejecutar_servidor():
     servidor_flask.run(port=3000)
 
-# --- LÓGICA DE LA INTERFAZ GRÁFICA (GUI) ---
-class Aplicacion:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("CS2 Soundpad Auto-Caster")
-        self.root.geometry("350x450")
-        self.root.resizable(False, False)
+# --- CONFIGURACIÓN UI MODERNA ---
+ctk.set_appearance_mode("dark")
+ctk.set_default_color_theme("blue")
+
+class Aplicacion(ctk.CTk):
+    def __init__(self):
+        super().__init__()
         
-        tk.Label(root, text="CS2 Soundpad Integración", font=("Arial", 14, "bold")).pack(pady=10)
+        self.title("CS2 Soundpad Auto-Caster")
+        self.geometry("400x550")
+        self.resizable(False, False)
         
-        tk.Label(root, text="¿Cada cuántas Kills suena el audio?").pack(pady=5)
-        self.entry_kills = tk.Entry(root, justify="center")
+        # --- HEADER ---
+        self.header_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.header_frame.pack(pady=(20, 10))
+        
+        self.lbl_title = ctk.CTkLabel(self.header_frame, text="CS2 Soundpad Caster", font=ctk.CTkFont(size=22, weight="bold"))
+        self.lbl_title.pack()
+        
+        self.lbl_subtitle = ctk.CTkLabel(self.header_frame, text="Automatiza tus clips de audio al hacer bajas", font=ctk.CTkFont(size=12), text_color="gray")
+        self.lbl_subtitle.pack()
+
+        # --- SETTINGS FRAME ---
+        self.settings_frame = ctk.CTkFrame(self)
+        self.settings_frame.pack(pady=10, padx=20, fill="both", expand=True)
+        
+        # Kills
+        self.lbl_kills = ctk.CTkLabel(self.settings_frame, text="🎯 ¿Cada cuántas Kills suena el audio?", font=ctk.CTkFont(weight="bold"))
+        self.lbl_kills.pack(pady=(15, 5))
+        self.entry_kills = ctk.CTkEntry(self.settings_frame, justify="center", width=80)
         self.entry_kills.insert(0, "2")
         self.entry_kills.pack()
         
-        tk.Label(root, text="Número de Audio en Soundpad:").pack(pady=5)
-        self.entry_audio = tk.Entry(root, justify="center")
+        # Audio Index
+        self.lbl_audio = ctk.CTkLabel(self.settings_frame, text="🎵 Número de Audio en Soundpad:", font=ctk.CTkFont(weight="bold"))
+        self.lbl_audio.pack(pady=(15, 5))
+        self.entry_audio = ctk.CTkEntry(self.settings_frame, justify="center", width=80)
         self.entry_audio.insert(0, "1")
         self.entry_audio.pack()
         
-        tk.Label(root, text="Ruta de Soundpad.exe:").pack(pady=5)
-        self.entry_ruta = tk.Entry(root, width=40, justify="center")
+        # Ruta Soundpad
+        self.lbl_ruta = ctk.CTkLabel(self.settings_frame, text="📂 Ruta de Soundpad.exe:", font=ctk.CTkFont(weight="bold"))
+        self.lbl_ruta.pack(pady=(15, 5))
+        
+        self.ruta_frame = ctk.CTkFrame(self.settings_frame, fg_color="transparent")
+        self.ruta_frame.pack(fill="x", padx=20, pady=(0, 15))
+        
+        self.entry_ruta = ctk.CTkEntry(self.ruta_frame, justify="left")
         self.entry_ruta.insert(0, ruta_soundpad)
-        self.entry_ruta.pack()
-        tk.Button(root, text="Buscar Soundpad", command=self.buscar_soundpad).pack(pady=5)
+        self.entry_ruta.pack(side="left", fill="x", expand=True, padx=(0, 5))
         
-        self.btn_cfg = tk.Button(root, text="1. Instalar CFG en CS2", bg="lightblue", command=self.instalar_cfg)
-        self.btn_cfg.pack(pady=15, fill="x", padx=40)
+        self.btn_buscar = ctk.CTkButton(self.ruta_frame, text="📁", width=40, command=self.buscar_soundpad)
+        self.btn_buscar.pack(side="right")
+
+        # --- ACTIONS ---
+        self.btn_cfg = ctk.CTkButton(self, text="⚙️ 1. Instalar CFG en CS2", fg_color="#d35400", hover_color="#e67e22", command=self.instalar_cfg)
+        self.btn_cfg.pack(pady=(10, 5), padx=40, fill="x")
         
-        self.btn_iniciar = tk.Button(root, text="2. INICIAR APP", bg="lightgreen", font=("Arial", 12, "bold"), command=self.iniciar_app)
-        self.btn_iniciar.pack(pady=5, fill="x", padx=40)
+        self.btn_iniciar = ctk.CTkButton(self, text="🚀 2. INICIAR APP", fg_color="#27ae60", hover_color="#2ecc71", font=ctk.CTkFont(size=14, weight="bold"), command=self.iniciar_app)
+        self.btn_iniciar.pack(pady=5, padx=40, fill="x", ipady=5)
         
-        self.lbl_estado = tk.Label(root, text="Estado: Detenido", fg="red")
-        self.lbl_estado.pack(pady=10)
+        self.lbl_estado = ctk.CTkLabel(self, text="Estado: DETENIDO", text_color="#e74c3c", font=ctk.CTkFont(weight="bold"))
+        self.lbl_estado.pack(pady=(10, 20))
         
         self.servidor_iniciado = False
 
     def buscar_soundpad(self):
         ruta = filedialog.askopenfilename(title="Selecciona Soundpad.exe", filetypes=[("Ejecutables", "*.exe")])
         if ruta:
-            self.entry_ruta.delete(0, tk.END)
+            self.entry_ruta.delete(0, ctk.END)
             self.entry_ruta.insert(0, ruta)
 
     def instalar_cfg(self):
@@ -92,19 +120,7 @@ class Aplicacion:
         if not ruta_cs2:
             return
             
-        contenido_cfg = """"Soundpad App"
-{
-    "uri" "http://localhost:3000"
-    "timeout" "5.0"
-    "buffer"  "0.1"
-    "throttle" "0.1"
-    "heartbeat" "10.0"
-    "data"
-    {
-        "provider"            "1"
-        "player_match_stats"  "1"
-    }
-}"""
+        contenido_cfg = """"Soundpad App"\n{\n    "uri" "http://localhost:3000"\n    "timeout" "5.0"\n    "buffer"  "0.1"\n    "throttle" "0.1"\n    "heartbeat" "10.0"\n    "data"\n    {\n        "provider"            "1"\n        "player_match_stats"  "1"\n    }\n}"""
         try:
             ruta_archivo = os.path.join(ruta_cs2, "gamestate_integration_soundpad.cfg")
             with open(ruta_archivo, "w") as f:
@@ -129,10 +145,9 @@ class Aplicacion:
             hilo.start()
             self.servidor_iniciado = True
             
-        self.lbl_estado.config(text="Estado: ESCUCHANDO PARTIDA...", fg="green")
-        self.btn_iniciar.config(text="ACTUALIZAR CONFIGURACIÓN")
+        self.lbl_estado.configure(text="Estado: ESCUCHANDO PARTIDA...", text_color="#2ecc71")
+        self.btn_iniciar.configure(text="🔄 ACTUALIZAR CONFIGURACIÓN")
 
 if __name__ == "__main__":
-    ventana = tk.Tk()
-    app = Aplicacion(ventana)
-    ventana.mainloop()
+    app = Aplicacion()
+    app.mainloop()
