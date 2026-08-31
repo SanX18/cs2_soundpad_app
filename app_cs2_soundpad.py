@@ -10,7 +10,7 @@ from flask import Flask, request
 import logging
 from datetime import datetime
 
-CURRENT_VERSION = "v1.6.0"
+CURRENT_VERSION = "v1.6.1"
 REPO = "SanX18/cs2_soundpad_app"
 
 appdata = os.environ.get('APPDATA')
@@ -106,6 +106,14 @@ class Aplicacion(ctk.CTk):
         global app_instance
         app_instance = self
         
+        # Limpiar archivos residuales del updater
+        if os.path.exists("updater.bat"):
+            try: os.remove("updater.bat")
+            except: pass
+        if os.path.exists("update_temp.exe"):
+            try: os.remove("update_temp.exe")
+            except: pass
+
         self.title(f"CS2 Soundpad Auto-Caster {CURRENT_VERSION}")
         self.geometry("460x720")
         self.resizable(False, False)
@@ -270,7 +278,9 @@ class Aplicacion(ctk.CTk):
                 return
 
             current_exe = os.path.basename(sys.executable)
-            bat_content = f"""@echo off\ntimeout /t 2 /nobreak > NUL\ndel "{current_exe}"\nren "{temp_exe}" "{current_exe}"\nstart "" "{current_exe}"\ndel "%~f0"\n"""
+            
+            # Use explorer.exe to prevent PyInstaller parent-process security errors
+            bat_content = f"""@echo off\ntimeout /t 2 /nobreak > NUL\ndel "{current_exe}"\nren "{temp_exe}" "{current_exe}"\nexplorer "{current_exe}"\n"""
             with open("updater.bat", "w") as f:
                 f.write(bat_content)
                 
