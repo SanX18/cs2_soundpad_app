@@ -5,12 +5,19 @@ import os
 import sys
 import subprocess
 import requests
+import json
 from flask import Flask, request
 import logging
 from datetime import datetime
 
-CURRENT_VERSION = "v1.5.0"
+CURRENT_VERSION = "v1.6.0"
 REPO = "SanX18/cs2_soundpad_app"
+
+appdata = os.environ.get('APPDATA')
+if not appdata:
+    appdata = os.path.expanduser('~')
+APP_DATA_DIR = os.path.join(appdata, 'CS2SoundpadCaster')
+CONFIG_FILE = os.path.join(APP_DATA_DIR, 'config.json')
 
 log = logging.getLogger('werkzeug')
 log.setLevel(logging.ERROR)
@@ -118,7 +125,7 @@ class Aplicacion(ctk.CTk):
         self.settings_frame = ctk.CTkFrame(self)
         self.settings_frame.pack(pady=10, padx=15, fill="both")
         
-        # --- TABLA DE REGLAS (5 FILAS) ---
+        # --- TABLA DE REGLAS ---
         self.rows_frame = ctk.CTkFrame(self.settings_frame, fg_color="transparent")
         self.rows_frame.pack(fill="x", pady=10, padx=10)
         
@@ -130,7 +137,7 @@ class Aplicacion(ctk.CTk):
         for i in range(5):
             ek = ctk.CTkEntry(self.rows_frame, width=90, justify="center", placeholder_text="-")
             ek.grid(row=i+1, column=0, padx=5, pady=3)
-            ek.insert(0, str(i+1)) # Pre-fill 1 to 5
+            ek.insert(0, str(i+1))
             
             ec = ctk.CTkEntry(self.rows_frame, width=90, justify="center", placeholder_text="(Opcional)")
             ec.grid(row=i+1, column=1, padx=5, pady=3)
@@ -155,7 +162,7 @@ class Aplicacion(ctk.CTk):
         self.btn_cfg = ctk.CTkButton(self, text="⚙️ 1. Instalar CFG en CS2", fg_color="#d35400", hover_color="#e67e22", command=self.instalar_cfg)
         self.btn_cfg.pack(pady=(5, 5), padx=40, fill="x")
         
-        self.btn_iniciar = ctk.CTkButton(self, text="🚀 2. INICIAR / ACTUALIZAR", fg_color="#27ae60", hover_color="#2ecc71", font=ctk.CTkFont(size=14, weight="bold"), command=self.iniciar_app)
+        self.btn_iniciar = ctk.CTkButton(self, text="🚀 2. INICIAR / GUARDAR", fg_color="#27ae60", hover_color="#2ecc71", font=ctk.CTkFont(size=14, weight="bold"), command=self.iniciar_app)
         self.btn_iniciar.pack(pady=5, padx=40, fill="x")
         
         # --- LOGS BOX ---
@@ -164,6 +171,9 @@ class Aplicacion(ctk.CTk):
         self.escribir_log(f"Aplicación {CURRENT_VERSION} lista.")
         
         self.servidor_iniciado = False
+        
+        # Cargar configuración guardada
+        self.cargar_config()
         
         # Iniciar comprobación de actualizaciones de fondo
         threading.Thread(target=comprobar_actualizaciones, daemon=True).start()
@@ -174,6 +184,57 @@ class Aplicacion(ctk.CTk):
         self.log_box.insert("end", f"[{hora}] {mensaje}\n")
         self.log_box.see("end")
         self.log_box.configure(state="disabled")
+
+    def cargar_config(self):
+        if os.path.exists(CONFIG_FILE):
+            try:
+                with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                
+                if "ruta_soundpad" in data:
+                    self.entry_ruta.delete(0, ctk.END)
+                    self.entry_ruta.insert(0, data["ruta_soundpad"])
+                    
+                reglas_guardadas = data.get("reglas", [])
+                for i in range(min(5, len(reglas_guardadas))):
+                    r = reglas_guardadas[i]
+                    
+                    self.rule_entries[i][0].delete(0, ctk.END)
+                    if r.get("kills"): self.rule_entries[i][0].insert(0, r["kills"])
+                    
+                    self.rule_entries[i][1].delete(0, ctk.END)
+                    if r.get("folder"): self.rule_entries[i][1].insert(0, r["folder"])
+                    
+                    self.rule_entries[i][2].delete(0, ctk.END)
+                    if r.get("audio"): self.rule_entries[i][2].insert(0, r["audio"])
+                    
+                self.escribir_log("📂 Configuración anterior cargada.")
+            except Exception as e:
+                self.escribir_log(f"⚠️ No se pudo cargar config: {e}")
+
+    def guardar_config(self):
+        try:
+            if not os.path.exists(APP_DATA_DIR):
+                os.makedirs(APP_DATA_DIR)
+                
+            data = {
+                "ruta_soundpad": self.entry_ruta.get(),
+                "reglas": []
+            }
+            
+            for ek, ec, ea in self.rule_entries:
+                data["reglas"].append({
+                    "kills": ek.get().strip(),
+                    "folder": ec.get().strip(),
+                    "audio": ea.get().strip()
+                })
+                
+            with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=4)
+                
+            self.escribir_log("💾 Configuración guardada correctamente.")
+        except Exception as e:
+            self.escribir_log(f"⚠️ Error guardando config: {e}")
 
     def preguntar_actualizacion(self, release_data):
         latest_version = release_data.get("tag_name")
@@ -265,6 +326,9 @@ class Aplicacion(ctk.CTk):
             
         nuevas_reglas.sort(key=lambda x: x['kills'], reverse=True)
         reglas_activas = nuevas_reglas
+        
+        # GUARDAR LA CONFIGURACIÓN DEL USUARIO
+        self.guardar_config()
         
         self.escribir_log(f"✅ {len(reglas_activas)} reglas cargadas.")
 
