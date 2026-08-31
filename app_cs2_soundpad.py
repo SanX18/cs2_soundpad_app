@@ -6,11 +6,13 @@ import sys
 import subprocess
 import requests
 import json
+import tempfile
+import time
 from flask import Flask, request
 import logging
 from datetime import datetime
 
-CURRENT_VERSION = "v1.6.2"
+CURRENT_VERSION = "v1.6.3"
 REPO = "SanX18/cs2_soundpad_app"
 
 appdata = os.environ.get('APPDATA')
@@ -112,13 +114,6 @@ class Aplicacion(ctk.CTk):
         global app_instance
         app_instance = self
         
-        if os.path.exists("updater.bat"):
-            try: os.remove("updater.bat")
-            except: pass
-        if os.path.exists("update_temp.exe"):
-            try: os.remove("update_temp.exe")
-            except: pass
-
         self.title(f"CS2 Soundpad Auto-Caster {CURRENT_VERSION}")
         self.geometry("460x720")
         self.resizable(False, False)
@@ -261,27 +256,35 @@ class Aplicacion(ctk.CTk):
 
     def realizar_actualizacion(self, download_url):
         try:
-            self.escribir_log("⬇️ Descargando actualización...")
+            self.escribir_log("⬇️ Iniciando descarga de la actualización...")
             response = requests.get(download_url, stream=True)
             response.raise_for_status()
             
-            temp_exe = "update_temp.exe"
+            # Usar carpeta temporal real del sistema para evitar errores de permisos locales
+            temp_dir = tempfile.gettempdir()
+            temp_exe = os.path.join(temp_dir, f"cs2_update_{int(time.time())}.exe")
+            bat_path = os.path.join(temp_dir, "updater_cs2.bat")
+            
+            self.escribir_log(f"📂 Guardando archivo temporal...")
             with open(temp_exe, 'wb') as f:
                 for chunk in response.iter_content(chunk_size=8192):
                     f.write(chunk)
             
-            self.escribir_log("✅ Descarga completada. Reiniciando...")
+            self.escribir_log("✅ Descarga completada. Preparando instalación...")
             
             if not getattr(sys, 'frozen', False):
-                self.escribir_log("⚠️ Modo desarrollador: La actualización automática solo funciona en el .exe compilado.")
+                self.escribir_log("⚠️ Modo desarrollador: Cancelando (solo funciona en .exe).")
                 return
 
-            current_exe = os.path.basename(sys.executable)
-            bat_content = f"""@echo off\ntimeout /t 2 /nobreak > NUL\ndel "{current_exe}"\nren "{temp_exe}" "{current_exe}"\nexplorer "{current_exe}"\n"""
-            with open("updater.bat", "w") as f:
+            my_exe = sys.executable
+            self.escribir_log(f"🎯 Archivo destino a reemplazar: {my_exe}")
+            
+            bat_content = f"""@echo off\ntimeout /t 2 /nobreak > NUL\ndel "{my_exe}"\ncopy /y "{temp_exe}" "{my_exe}"\nexplorer "{my_exe}"\ndel "%~f0"\n"""
+            with open(bat_path, "w") as f:
                 f.write(bat_content)
                 
-            subprocess.Popen("updater.bat", shell=True)
+            self.escribir_log("🚀 Ejecutando instalador y cerrando app vieja...")
+            subprocess.Popen(bat_path, shell=True)
             sys.exit(0)
             
         except Exception as e:
