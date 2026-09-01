@@ -11,8 +11,9 @@ import time
 from flask import Flask, request
 import logging
 from datetime import datetime
+import random
 
-CURRENT_VERSION = "v1.7.6"
+CURRENT_VERSION = "v1.8.0"
 REPO = "SanX18/cs2_soundpad_app"
 
 appdata = os.environ.get('APPDATA')
@@ -41,7 +42,7 @@ estado_anterior = {
 }
 
 reglas_activas = []
-eventos_activos = {}
+eventos_activos = []
 ruta_soundpad = r"C:\Program Files (x86)\Steam\steamapps\common\Soundpad\Soundpad.exe"
 ultimo_payload = {}
 
@@ -147,6 +148,7 @@ def recibir_datos():
             estado_anterior['round_new_flag'] = False
 
         # Rachas de Bajas
+        team = player.get('team', '')
         if kills > estado_anterior['kills']:
             kills_ronda = kills - estado_anterior['kills_offset_ronda']
             log_msg(f"💥 ¡Baja detectada! Kills totales: {kills} (En esta ronda: {kills_ronda})")
@@ -156,8 +158,11 @@ def recibir_datos():
                 kill_en_ciclo = ((kills_ronda - 1) % max_kills_ciclo) + 1
                 for regla in reglas_activas:
                     if kill_en_ciclo == regla['kills']:
+                        if regla.get('equipo', 'Ambos') != 'Ambos' and regla.get('equipo', 'Ambos') != team:
+                            continue
                         log_msg(f"🎯 Activando sonido para la baja {regla['kills']}.")
-                        reproducir_sonido(regla['folder'], regla['audio'])
+                        audio_elegido = random.choice(regla['audio'])
+                        reproducir_sonido(regla['folder'], audio_elegido)
                         break
                         
         if deaths > estado_anterior['deaths']: eventos_ocurridos.append("Muerte")
@@ -170,11 +175,16 @@ def recibir_datos():
         estado_anterior.update({'kills': kills, 'deaths': deaths, 'assists': assists, 'mvps': mvps, 'flashed': flashed, 'health': health})
 
     # --- 3. LANZAR EVENTOS (Globales + Personales) ---
+    team = player.get('team', '') # Para eventos globales donde player.team sigue existiendo
     for evento in eventos_ocurridos:
-        if evento in eventos_activos:
-            log_msg(f"🌟 Evento Especial detectado: {evento}")
-            regla_evento = eventos_activos[evento]
-            reproducir_sonido(regla_evento['folder'], regla_evento['audio'])
+        for regla_evento in eventos_activos:
+            if regla_evento['nombre'] == evento:
+                if regla_evento.get('equipo', 'Ambos') != 'Ambos' and regla_evento.get('equipo', 'Ambos') != team:
+                    continue
+                log_msg(f"🌟 Evento Especial detectado: {evento}")
+                audio_elegido = random.choice(regla_evento['audio'])
+                reproducir_sonido(regla_evento['folder'], audio_elegido)
+                break
             
     return 'OK', 200
 
@@ -208,7 +218,7 @@ class Aplicacion(ctk.CTk):
         app_instance = self
         
         self.title(f"CS2 Soundpad Auto-Caster {CURRENT_VERSION}")
-        self.geometry("480x950")
+        self.geometry("580x1020")
         self.resizable(False, False)
         
         try:
@@ -230,47 +240,57 @@ class Aplicacion(ctk.CTk):
         self.rows_frame = ctk.CTkFrame(self.settings_frame, fg_color="transparent")
         self.rows_frame.pack(fill="x", pady=5, padx=10)
         
-        ctk.CTkLabel(self.rows_frame, text="Cada X Kills", width=90, font=ctk.CTkFont(weight="bold")).grid(row=0, column=0, padx=5)
-        ctk.CTkLabel(self.rows_frame, text="Nº Carpeta", width=90, font=ctk.CTkFont(weight="bold")).grid(row=0, column=1, padx=5)
-        ctk.CTkLabel(self.rows_frame, text="Nº Audio", width=90, font=ctk.CTkFont(weight="bold")).grid(row=0, column=2, padx=5)
+        ctk.CTkLabel(self.rows_frame, text="Cada X Kills", width=80, font=ctk.CTkFont(weight="bold")).grid(row=0, column=0, padx=5)
+        ctk.CTkLabel(self.rows_frame, text="Equipo", width=80, font=ctk.CTkFont(weight="bold")).grid(row=0, column=1, padx=5)
+        ctk.CTkLabel(self.rows_frame, text="Nº Carpeta", width=80, font=ctk.CTkFont(weight="bold")).grid(row=0, column=2, padx=5)
+        ctk.CTkLabel(self.rows_frame, text="Nº Audio (Ej: 1,4)", width=120, font=ctk.CTkFont(weight="bold")).grid(row=0, column=3, padx=5)
         
         self.rule_entries = []
         for i in range(5):
-            ek = ctk.CTkEntry(self.rows_frame, width=90, justify="center", placeholder_text="-")
+            ek = ctk.CTkEntry(self.rows_frame, width=80, justify="center", placeholder_text="-")
             ek.grid(row=i+1, column=0, padx=5, pady=3)
             ek.insert(0, str(i+1))
             
-            ec = ctk.CTkEntry(self.rows_frame, width=90, justify="center", placeholder_text="(Opcional)")
-            ec.grid(row=i+1, column=1, padx=5, pady=3)
+            eq = ctk.CTkComboBox(self.rows_frame, width=80, values=["Ambos", "CT", "T"])
+            eq.grid(row=i+1, column=1, padx=5, pady=3)
+            eq.set("Ambos")
             
-            ea = ctk.CTkEntry(self.rows_frame, width=90, justify="center", placeholder_text="-")
-            ea.grid(row=i+1, column=2, padx=5, pady=3)
+            ec = ctk.CTkEntry(self.rows_frame, width=80, justify="center", placeholder_text="(Opcional)")
+            ec.grid(row=i+1, column=2, padx=5, pady=3)
             
-            self.rule_entries.append((ek, ec, ea))
+            ea = ctk.CTkEntry(self.rows_frame, width=120, justify="center", placeholder_text="-")
+            ea.grid(row=i+1, column=3, padx=5, pady=3)
+            
+            self.rule_entries.append((ek, eq, ec, ea))
             
         ctk.CTkLabel(self.settings_frame, text="🌟 Eventos Especiales", font=ctk.CTkFont(weight="bold", size=14)).pack(pady=(15, 0))
         self.events_frame = ctk.CTkFrame(self.settings_frame, fg_color="transparent")
         self.events_frame.pack(fill="x", pady=5, padx=10)
         
         ctk.CTkLabel(self.events_frame, text="Evento", width=140, font=ctk.CTkFont(weight="bold")).grid(row=0, column=0, padx=5)
-        ctk.CTkLabel(self.events_frame, text="Nº Carpeta", width=90, font=ctk.CTkFont(weight="bold")).grid(row=0, column=1, padx=5)
-        ctk.CTkLabel(self.events_frame, text="Nº Audio", width=90, font=ctk.CTkFont(weight="bold")).grid(row=0, column=2, padx=5)
+        ctk.CTkLabel(self.events_frame, text="Equipo", width=80, font=ctk.CTkFont(weight="bold")).grid(row=0, column=1, padx=5)
+        ctk.CTkLabel(self.events_frame, text="Nº Carpeta", width=80, font=ctk.CTkFont(weight="bold")).grid(row=0, column=2, padx=5)
+        ctk.CTkLabel(self.events_frame, text="Nº Audio (Ej: 1,4)", width=120, font=ctk.CTkFont(weight="bold")).grid(row=0, column=3, padx=5)
         
         self.event_entries = []
         opciones_eventos = ["- Ninguno -", "Muerte", "Asistencia", "MVP", "Cegado (Flashbang)", "Daño Recibido", "Bomba Plantada", "Bomba Explotada", "Bomba Desactivada", "Fin de Ronda"]
         
-        for i in range(4):
+        for i in range(6):
             cb = ctk.CTkComboBox(self.events_frame, width=140, values=opciones_eventos)
             cb.grid(row=i+1, column=0, padx=5, pady=3)
             cb.set("- Ninguno -")
             
-            ec = ctk.CTkEntry(self.events_frame, width=90, justify="center", placeholder_text="(Opcional)")
-            ec.grid(row=i+1, column=1, padx=5, pady=3)
+            eq = ctk.CTkComboBox(self.events_frame, width=80, values=["Ambos", "CT", "T"])
+            eq.grid(row=i+1, column=1, padx=5, pady=3)
+            eq.set("Ambos")
             
-            ea = ctk.CTkEntry(self.events_frame, width=90, justify="center", placeholder_text="-")
-            ea.grid(row=i+1, column=2, padx=5, pady=3)
+            ec = ctk.CTkEntry(self.events_frame, width=80, justify="center", placeholder_text="(Opcional)")
+            ec.grid(row=i+1, column=2, padx=5, pady=3)
             
-            self.event_entries.append((cb, ec, ea))
+            ea = ctk.CTkEntry(self.events_frame, width=120, justify="center", placeholder_text="-")
+            ea.grid(row=i+1, column=3, padx=5, pady=3)
+            
+            self.event_entries.append((cb, eq, ec, ea))
 
         self.lbl_ruta = ctk.CTkLabel(self.settings_frame, text="📂 Ruta de Soundpad.exe:", font=ctk.CTkFont(weight="bold"))
         self.lbl_ruta.pack(pady=(15, 0))
@@ -334,19 +354,35 @@ class Aplicacion(ctk.CTk):
                     r = reglas_guardadas[i]
                     self.rule_entries[i][0].delete(0, ctk.END)
                     if r.get("kills"): self.rule_entries[i][0].insert(0, r["kills"])
-                    self.rule_entries[i][1].delete(0, ctk.END)
-                    if r.get("folder"): self.rule_entries[i][1].insert(0, r["folder"])
+                    if r.get("equipo"): self.rule_entries[i][1].set(r["equipo"])
+                    else: self.rule_entries[i][1].set("Ambos")
                     self.rule_entries[i][2].delete(0, ctk.END)
-                    if r.get("audio"): self.rule_entries[i][2].insert(0, r["audio"])
+                    if r.get("folder"): self.rule_entries[i][2].insert(0, r["folder"])
+                    self.rule_entries[i][3].delete(0, ctk.END)
+                    
+                    if r.get("audio"):
+                        aud_val = r["audio"]
+                        if isinstance(aud_val, list):
+                            self.rule_entries[i][3].insert(0, ",".join(map(str, aud_val)))
+                        else:
+                            self.rule_entries[i][3].insert(0, str(aud_val).strip('[]'))
                     
                 eventos_guardados = data.get("eventos", [])
-                for i in range(min(4, len(eventos_guardados))):
+                for i in range(min(6, len(eventos_guardados))):
                     ev = eventos_guardados[i]
                     if ev.get("nombre"): self.event_entries[i][0].set(ev["nombre"])
-                    self.event_entries[i][1].delete(0, ctk.END)
-                    if ev.get("folder"): self.event_entries[i][1].insert(0, ev["folder"])
+                    if ev.get("equipo"): self.event_entries[i][1].set(ev["equipo"])
+                    else: self.event_entries[i][1].set("Ambos")
                     self.event_entries[i][2].delete(0, ctk.END)
-                    if ev.get("audio"): self.event_entries[i][2].insert(0, ev["audio"])
+                    if ev.get("folder"): self.event_entries[i][2].insert(0, ev["folder"])
+                    self.event_entries[i][3].delete(0, ctk.END)
+                    
+                    if ev.get("audio"):
+                        aud_val = ev["audio"]
+                        if isinstance(aud_val, list):
+                            self.event_entries[i][3].insert(0, ",".join(map(str, aud_val)))
+                        else:
+                            self.event_entries[i][3].insert(0, str(aud_val).strip('[]'))
                     
                 self.escribir_log("📂 Configuración anterior cargada.")
             except Exception as e:
@@ -363,16 +399,18 @@ class Aplicacion(ctk.CTk):
                 "eventos": []
             }
             
-            for ek, ec, ea in self.rule_entries:
+            for ek, eq, ec, ea in self.rule_entries:
                 data["reglas"].append({
                     "kills": ek.get().strip(),
+                    "equipo": eq.get(),
                     "folder": ec.get().strip(),
                     "audio": ea.get().strip()
                 })
                 
-            for cb, ec, ea in self.event_entries:
+            for cb, eq, ec, ea in self.event_entries:
                 data["eventos"].append({
                     "nombre": cb.get(),
+                    "equipo": eq.get(),
                     "folder": ec.get().strip(),
                     "audio": ea.get().strip()
                 })
@@ -461,35 +499,39 @@ class Aplicacion(ctk.CTk):
         
         ruta_soundpad = self.entry_ruta.get()
         nuevas_reglas = []
-        nuevos_eventos = {}
+        nuevos_eventos = []
         
-        for ek, ec, ea in self.rule_entries:
+        for ek, eq, ec, ea in self.rule_entries:
             v_k = ek.get().strip()
-            v_a = ea.get().strip()
+            v_e = eq.get()
             v_c = ec.get().strip()
+            v_a = ea.get().strip()
             
             if v_k and v_a:
                 try:
                     rk = int(v_k)
-                    ra = int(v_a)
                     rc = int(v_c) if v_c else 0
-                    nuevas_reglas.append({'kills': rk, 'folder': rc, 'audio': ra})
+                    audios = [int(x.strip()) for x in v_a.split(',') if x.strip()]
+                    if not audios: raise ValueError
+                    nuevas_reglas.append({'kills': rk, 'equipo': v_e, 'folder': rc, 'audio': audios})
                 except ValueError:
-                    self.escribir_log("❌ Error: Kills y Audio deben ser números.")
+                    self.escribir_log("❌ Error: Audio debe tener números (ej: 4,5).")
                     return
                     
-        for cb, ec, ea in self.event_entries:
+        for cb, eq, ec, ea in self.event_entries:
             v_nombre = cb.get()
-            v_a = ea.get().strip()
+            v_e = eq.get()
             v_c = ec.get().strip()
+            v_a = ea.get().strip()
             
             if v_nombre != "- Ninguno -" and v_a:
                 try:
-                    ra = int(v_a)
                     rc = int(v_c) if v_c else 0
-                    nuevos_eventos[v_nombre] = {'folder': rc, 'audio': ra}
+                    audios = [int(x.strip()) for x in v_a.split(',') if x.strip()]
+                    if not audios: raise ValueError
+                    nuevos_eventos.append({'nombre': v_nombre, 'equipo': v_e, 'folder': rc, 'audio': audios})
                 except ValueError:
-                    self.escribir_log("❌ Error: Nº Carpeta y Nº Audio deben ser enteros.")
+                    self.escribir_log("❌ Error: Audio debe tener números (ej: 4,5).")
                     return
                     
         if not nuevas_reglas and not nuevos_eventos:
