@@ -12,7 +12,7 @@ from flask import Flask, request
 import logging
 from datetime import datetime
 
-CURRENT_VERSION = "v1.7.5"
+CURRENT_VERSION = "v1.7.6"
 REPO = "SanX18/cs2_soundpad_app"
 
 appdata = os.environ.get('APPDATA')
@@ -36,7 +36,8 @@ estado_anterior = {
     'health': 100,
     'bomb': '',
     'round_phase': '',
-    'kills_offset_ronda': 0
+    'kills_offset_ronda': 0,
+    'round_new_flag': False
 }
 
 reglas_activas = []
@@ -82,99 +83,99 @@ def recibir_datos():
     
     provider = data.get('provider', {})
     player = data.get('player', {})
+    round_data = data.get('round', {})
     
     provider_steamid = provider.get('steamid', '')
     player_steamid = player.get('steamid', '')
     
-    # FILTRO MODO ESPECTADOR: Si el SteamID que envía CS2 no es el del jugador en cámara, ignorar.
-    if provider_steamid and player_steamid and provider_steamid != player_steamid:
-        return 'OK', 200
+    # ¿Estamos en modo espectador? (Viendo a otro jugador)
+    es_espectador = bool(provider_steamid and player_steamid and provider_steamid != player_steamid)
         
-    map_data = data.get('map', {})
-    round_data = data.get('round', {})
-    match_stats = player.get('match_stats', {})
-    state = player.get('state', {})
-    
-    kills = match_stats.get('kills', 0)
-    deaths = match_stats.get('deaths', 0)
-    assists = match_stats.get('assists', 0)
-    mvps = match_stats.get('mvps', 0)
-    
-    flashed = state.get('flashed', 0)
-    health = state.get('health', 100)
-    
     bomb = round_data.get('bomb', '')
     round_phase = round_data.get('phase', '')
     
-    if estado_anterior['kills'] == -1:
-        log_msg(f"📡 Conectado con CS2. Kills actuales: {kills}")
-        estado_anterior.update({
-            'kills': kills, 'deaths': deaths, 'assists': assists, 'mvps': mvps,
-            'flashed': flashed, 'health': health, 'bomb': bomb, 'round_phase': round_phase,
-            'kills_offset_ronda': kills
-        })
-        return 'OK', 200
-
-    if kills < estado_anterior['kills'] or deaths < estado_anterior['deaths']:
-        log_msg(f"🔄 Reinicio de mapa detectado. Reseteando estadísticas.")
-        estado_anterior.update({
-            'kills': kills, 'deaths': deaths, 'assists': assists, 'mvps': mvps,
-            'flashed': flashed, 'health': health, 'bomb': bomb, 'round_phase': round_phase,
-            'kills_offset_ronda': kills
-        })
-        return 'OK', 200
-
-    if round_phase != estado_anterior['round_phase'] and round_phase in ['freezetime', 'live']:
-        if estado_anterior['round_phase'] != '':
-            log_msg("🔄 Nueva ronda. Contador de audios reseteado a 0.")
-            estado_anterior['kills_offset_ronda'] = kills
-
-    if kills > estado_anterior['kills']:
-        kills_ronda = kills - estado_anterior['kills_offset_ronda']
-        log_msg(f"💥 ¡Baja detectada! Kills totales: {kills} (En esta ronda: {kills_ronda})")
-        
-        if reglas_activas and kills_ronda > 0:
-            max_kills_ciclo = max(r['kills'] for r in reglas_activas)
-            kill_en_ciclo = ((kills_ronda - 1) % max_kills_ciclo) + 1
-            log_msg(f"🔄 Posición en ciclo de rachas (1-{max_kills_ciclo}): Baja nº {kill_en_ciclo}")
-            for regla in reglas_activas:
-                if kill_en_ciclo == regla['kills']:
-                    log_msg(f"🎯 Activando sonido para la baja {regla['kills']}.")
-                    reproducir_sonido(regla['folder'], regla['audio'])
-                    break
-                    
     eventos_ocurridos = []
-    
-    if deaths > estado_anterior['deaths']: eventos_ocurridos.append("Muerte")
-    if assists > estado_anterior['assists']: eventos_ocurridos.append("Asistencia")
-    if mvps > estado_anterior['mvps']: eventos_ocurridos.append("MVP")
-        
-    if flashed > 150 and estado_anterior['flashed'] <= 150:
-        eventos_ocurridos.append("Cegado (Flashbang)")
-        
-    if health < estado_anterior['health'] and health > 0 and estado_anterior['health'] > 0:
-        eventos_ocurridos.append("Daño Recibido")
-        
-    if bomb != estado_anterior['bomb']:
+
+    # --- 1. PROCESAR ESTADO GLOBAL (Rondas y Bomba) SIEMPRE, incluso de espectador ---
+    if estado_anterior['bomb'] != bomb:
         if bomb == 'planted': eventos_ocurridos.append("Bomba Plantada")
         elif bomb == 'exploded': eventos_ocurridos.append("Bomba Explotada")
         elif bomb == 'defused': eventos_ocurridos.append("Bomba Desactivada")
-            
-    if round_phase == 'over' and estado_anterior['round_phase'] != 'over':
-        eventos_ocurridos.append("Fin de Ronda")
+        estado_anterior['bomb'] = bomb
         
+    if estado_anterior['round_phase'] != round_phase:
+        if round_phase == 'over' and estado_anterior['round_phase'] != '':
+            eventos_ocurridos.append("Fin de Ronda")
+            
+        if round_phase in ['freezetime', 'live']:
+            if estado_anterior['round_phase'] != '':
+                log_msg("🔄 Nueva ronda detectada.")
+            estado_anterior['round_new_flag'] = True
+            
+        estado_anterior['round_phase'] = round_phase
+
+    # --- 2. PROCESAR ESTADO PERSONAL SOLO SI SOMOS NOSOTROS MISMOS ---
+    if not es_espectador:
+        match_stats = player.get('match_stats', {})
+        state = player.get('state', {})
+        
+        kills = match_stats.get('kills', 0)
+        deaths = match_stats.get('deaths', 0)
+        assists = match_stats.get('assists', 0)
+        mvps = match_stats.get('mvps', 0)
+        flashed = state.get('flashed', 0)
+        health = state.get('health', 100)
+        
+        # Inicialización
+        if estado_anterior['kills'] == -1:
+            log_msg(f"📡 Conectado con CS2. Kills actuales: {kills}")
+            estado_anterior.update({'kills': kills, 'deaths': deaths, 'assists': assists, 'mvps': mvps, 'flashed': flashed, 'health': health, 'kills_offset_ronda': kills})
+            estado_anterior['round_new_flag'] = False
+            return 'OK', 200
+
+        # Reinicio de mapa
+        if kills < estado_anterior['kills'] or deaths < estado_anterior['deaths']:
+            log_msg(f"🔄 Reinicio de mapa detectado. Reseteando estadísticas personales.")
+            estado_anterior.update({'kills': kills, 'deaths': deaths, 'assists': assists, 'mvps': mvps, 'flashed': flashed, 'health': health, 'kills_offset_ronda': kills})
+            estado_anterior['round_new_flag'] = False
+            return 'OK', 200
+
+        # Reinicio de ronda personal (cuando reaparecemos)
+        if estado_anterior.get('round_new_flag', False):
+            log_msg("🔄 Aplicando reinicio de kills a la nueva ronda personal.")
+            estado_anterior['kills_offset_ronda'] = kills
+            estado_anterior['round_new_flag'] = False
+
+        # Rachas de Bajas
+        if kills > estado_anterior['kills']:
+            kills_ronda = kills - estado_anterior['kills_offset_ronda']
+            log_msg(f"💥 ¡Baja detectada! Kills totales: {kills} (En esta ronda: {kills_ronda})")
+            
+            if reglas_activas and kills_ronda > 0:
+                max_kills_ciclo = max(r['kills'] for r in reglas_activas)
+                kill_en_ciclo = ((kills_ronda - 1) % max_kills_ciclo) + 1
+                for regla in reglas_activas:
+                    if kill_en_ciclo == regla['kills']:
+                        log_msg(f"🎯 Activando sonido para la baja {regla['kills']}.")
+                        reproducir_sonido(regla['folder'], regla['audio'])
+                        break
+                        
+        if deaths > estado_anterior['deaths']: eventos_ocurridos.append("Muerte")
+        if assists > estado_anterior['assists']: eventos_ocurridos.append("Asistencia")
+        if mvps > estado_anterior['mvps']: eventos_ocurridos.append("MVP")
+        if flashed > 150 and estado_anterior['flashed'] <= 150: eventos_ocurridos.append("Cegado (Flashbang)")
+        if health < estado_anterior['health'] and health > 0 and estado_anterior['health'] > 0: eventos_ocurridos.append("Daño Recibido")
+
+        # Guardar estado personal
+        estado_anterior.update({'kills': kills, 'deaths': deaths, 'assists': assists, 'mvps': mvps, 'flashed': flashed, 'health': health})
+
+    # --- 3. LANZAR EVENTOS (Globales + Personales) ---
     for evento in eventos_ocurridos:
         if evento in eventos_activos:
-            # Cooldown eliminado a petición del usuario
             log_msg(f"🌟 Evento Especial detectado: {evento}")
             regla_evento = eventos_activos[evento]
             reproducir_sonido(regla_evento['folder'], regla_evento['audio'])
-
-    estado_anterior.update({
-        'kills': kills, 'deaths': deaths, 'assists': assists, 'mvps': mvps,
-        'flashed': flashed, 'health': health, 'bomb': bomb, 'round_phase': round_phase
-    })
-    
+            
     return 'OK', 200
 
 def ejecutar_servidor():
