@@ -12,7 +12,7 @@ from flask import Flask, request
 import logging
 from datetime import datetime
 
-CURRENT_VERSION = "v1.6.4"
+CURRENT_VERSION = "v1.7.0"
 REPO = "SanX18/cs2_soundpad_app"
 
 appdata = os.environ.get('APPDATA')
@@ -27,8 +27,19 @@ log.setLevel(logging.ERROR)
 servidor_flask = Flask(__name__)
 app_instance = None
 
-kills_anteriores = -1
+estado_anterior = {
+    'kills': -1,
+    'deaths': -1,
+    'assists': -1,
+    'mvps': -1,
+    'flashed': 0,
+    'health': 100,
+    'bomb': '',
+    'round_phase': ''
+}
+
 reglas_activas = []
+eventos_activos = {}
 ruta_soundpad = r"C:\Program Files (x86)\Steam\steamapps\common\Soundpad\Soundpad.exe"
 
 def resource_path(relative_path):
@@ -57,37 +68,102 @@ def reproducir_sonido(carpeta, audio):
 
 @servidor_flask.route('/', methods=['POST'])
 def recibir_datos():
-    global kills_anteriores
+    global estado_anterior
     data = request.get_json()
     
-    if data and 'player' in data and 'match_stats' in data['player']:
-        kills_actuales = data['player']['match_stats'].get('kills', 0)
+    if not data:
+        return 'OK', 200
         
-        if kills_anteriores == -1:
-            kills_anteriores = kills_actuales
-            log_msg(f"📡 Conectado con CS2. Kills actuales: {kills_actuales}")
+    map_data = data.get('map', {})
+    round_data = data.get('round', {})
+    player = data.get('player', {})
+    match_stats = player.get('match_stats', {})
+    state = player.get('state', {})
+    
+    kills = match_stats.get('kills', 0)
+    deaths = match_stats.get('deaths', 0)
+    assists = match_stats.get('assists', 0)
+    mvps = match_stats.get('mvps', 0)
+    
+    flashed = state.get('flashed', 0)
+    health = state.get('health', 100)
+    
+    bomb = round_data.get('bomb', '')
+    round_phase = round_data.get('phase', '')
+    
+    # Inicialización la primera vez que recibimos datos
+    if estado_anterior['kills'] == -1:
+        log_msg(f"📡 Conectado con CS2. Kills actuales: {kills}")
+        estado_anterior.update({
+            'kills': kills, 'deaths': deaths, 'assists': assists, 'mvps': mvps,
+            'flashed': flashed, 'health': health, 'bomb': bomb, 'round_phase': round_phase
+        })
+        return 'OK', 200
+
+    # Detección de reinicio de mapa (ej. aim_botz restart)
+    if kills < estado_anterior['kills'] or deaths < estado_anterior['deaths']:
+        log_msg(f"🔄 Reinicio de mapa detectado. Reseteando estadísticas.")
+        estado_anterior.update({
+            'kills': kills, 'deaths': deaths, 'assists': assists, 'mvps': mvps,
+            'flashed': flashed, 'health': health, 'bomb': bomb, 'round_phase': round_phase
+        })
+        return 'OK', 200
+
+    # ----- PROCESAR KILLS (Ciclos) -----
+    if kills > estado_anterior['kills']:
+        log_msg(f"💥 ¡Baja detectada! Kills totales: {kills}")
+        if reglas_activas:
+            max_kills_ciclo = max(r['kills'] for r in reglas_activas)
+            kill_en_ciclo = ((kills - 1) % max_kills_ciclo) + 1
+            log_msg(f"🔄 Posición en ciclo de rachas (1-{max_kills_ciclo}): Baja nº {kill_en_ciclo}")
+            for regla in reglas_activas:
+                if kill_en_ciclo == regla['kills']:
+                    log_msg(f"🎯 Activando sonido para la baja {regla['kills']}.")
+                    reproducir_sonido(regla['folder'], regla['audio'])
+                    break
+                    
+    # ----- PROCESAR EVENTOS ESPECIALES -----
+    eventos_ocurridos = []
+    
+    if deaths > estado_anterior['deaths']:
+        eventos_ocurridos.append("Muerte")
+    if assists > estado_anterior['assists']:
+        eventos_ocurridos.append("Asistencia")
+    if mvps > estado_anterior['mvps']:
+        eventos_ocurridos.append("MVP")
+        
+    # Flashed: El valor sube a 255 cuando estás ciego y baja poco a poco. Avisamos cuando supera 200
+    if flashed > 200 and estado_anterior['flashed'] < 200:
+        eventos_ocurridos.append("Cegado (Flashbang)")
+        
+    # Daño Recibido (evitamos el daño letal que ya cuenta como "Muerte")
+    if health < estado_anterior['health'] and health > 0 and estado_anterior['health'] > 0:
+        eventos_ocurridos.append("Daño Recibido")
+        
+    if bomb != estado_anterior['bomb']:
+        if bomb == 'planted':
+            eventos_ocurridos.append("Bomba Plantada")
+        elif bomb == 'exploded':
+            eventos_ocurridos.append("Bomba Explotada")
+        elif bomb == 'defused':
+            eventos_ocurridos.append("Bomba Desactivada")
             
-        # FIX: Detectar si el usuario reinicia el mapa o la partida (los kills bajan a 0)
-        if kills_actuales < kills_anteriores:
-            log_msg(f"🔄 Reinicio de mapa detectado. Reseteando contador a {kills_actuales} kills.")
-            kills_anteriores = kills_actuales
-            
-        elif kills_actuales > kills_anteriores:
-            log_msg(f"💥 ¡Baja detectada! Kills totales: {kills_actuales}")
-            
-            if reglas_activas:
-                max_kills_ciclo = max(r['kills'] for r in reglas_activas)
-                kill_en_ciclo = ((kills_actuales - 1) % max_kills_ciclo) + 1
-                
-                log_msg(f"🔄 Posición en el ciclo de rachas (1-{max_kills_ciclo}): Baja nº {kill_en_ciclo}")
-                
-                for regla in reglas_activas:
-                    if kill_en_ciclo == regla['kills']:
-                        log_msg(f"🎯 Activando sonido para la baja {regla['kills']}.")
-                        reproducir_sonido(regla['folder'], regla['audio'])
-                        break
-                        
-            kills_anteriores = kills_actuales
+    if round_phase == 'over' and estado_anterior['round_phase'] != 'over':
+        eventos_ocurridos.append("Fin de Ronda")
+        
+    # Ejecutar los sonidos de los eventos que han ocurrido
+    for evento in eventos_ocurridos:
+        if evento in eventos_activos:
+            log_msg(f"🌟 Evento Especial: {evento}")
+            regla_evento = eventos_activos[evento]
+            reproducir_sonido(regla_evento['folder'], regla_evento['audio'])
+
+    # Actualizar estado para la siguiente petición
+    estado_anterior.update({
+        'kills': kills, 'deaths': deaths, 'assists': assists, 'mvps': mvps,
+        'flashed': flashed, 'health': health, 'bomb': bomb, 'round_phase': round_phase
+    })
+    
     return 'OK', 200
 
 def ejecutar_servidor():
@@ -120,7 +196,7 @@ class Aplicacion(ctk.CTk):
         app_instance = self
         
         self.title(f"CS2 Soundpad Auto-Caster {CURRENT_VERSION}")
-        self.geometry("460x720")
+        self.geometry("480x860")
         self.resizable(False, False)
         
         try:
@@ -132,14 +208,16 @@ class Aplicacion(ctk.CTk):
         self.header_frame.pack(pady=(15, 5))
         self.lbl_title = ctk.CTkLabel(self.header_frame, text="CS2 Soundpad Caster", font=ctk.CTkFont(size=22, weight="bold"))
         self.lbl_title.pack()
-        self.lbl_subtitle = ctk.CTkLabel(self.header_frame, text="Configura múltiples audios según tus kills", font=ctk.CTkFont(size=12), text_color="gray")
+        self.lbl_subtitle = ctk.CTkLabel(self.header_frame, text="Configura audios para rachas y eventos de la partida", font=ctk.CTkFont(size=12), text_color="gray")
         self.lbl_subtitle.pack()
         
-        self.settings_frame = ctk.CTkFrame(self)
-        self.settings_frame.pack(pady=10, padx=15, fill="both")
+        self.settings_frame = ctk.CTkScrollableFrame(self)
+        self.settings_frame.pack(pady=10, padx=15, fill="both", expand=True)
         
+        # --- TABLA DE RACHAS (KILLS) ---
+        ctk.CTkLabel(self.settings_frame, text="🔫 Rachas de Bajas", font=ctk.CTkFont(weight="bold", size=14)).pack(pady=(5, 0))
         self.rows_frame = ctk.CTkFrame(self.settings_frame, fg_color="transparent")
-        self.rows_frame.pack(fill="x", pady=10, padx=10)
+        self.rows_frame.pack(fill="x", pady=5, padx=10)
         
         ctk.CTkLabel(self.rows_frame, text="Cada X Kills", width=90, font=ctk.CTkFont(weight="bold")).grid(row=0, column=0, padx=5)
         ctk.CTkLabel(self.rows_frame, text="Nº Carpeta", width=90, font=ctk.CTkFont(weight="bold")).grid(row=0, column=1, padx=5)
@@ -158,9 +236,35 @@ class Aplicacion(ctk.CTk):
             ea.grid(row=i+1, column=2, padx=5, pady=3)
             
             self.rule_entries.append((ek, ec, ea))
+            
+        # --- TABLA DE EVENTOS ESPECIALES ---
+        ctk.CTkLabel(self.settings_frame, text="🌟 Eventos Especiales", font=ctk.CTkFont(weight="bold", size=14)).pack(pady=(15, 0))
+        self.events_frame = ctk.CTkFrame(self.settings_frame, fg_color="transparent")
+        self.events_frame.pack(fill="x", pady=5, padx=10)
         
+        ctk.CTkLabel(self.events_frame, text="Evento", width=140, font=ctk.CTkFont(weight="bold")).grid(row=0, column=0, padx=5)
+        ctk.CTkLabel(self.events_frame, text="Nº Carpeta", width=90, font=ctk.CTkFont(weight="bold")).grid(row=0, column=1, padx=5)
+        ctk.CTkLabel(self.events_frame, text="Nº Audio", width=90, font=ctk.CTkFont(weight="bold")).grid(row=0, column=2, padx=5)
+        
+        self.event_entries = []
+        opciones_eventos = ["- Ninguno -", "Muerte", "Asistencia", "MVP", "Cegado (Flashbang)", "Daño Recibido", "Bomba Plantada", "Bomba Explotada", "Bomba Desactivada", "Fin de Ronda"]
+        
+        for i in range(4):
+            cb = ctk.CTkComboBox(self.events_frame, width=140, values=opciones_eventos)
+            cb.grid(row=i+1, column=0, padx=5, pady=3)
+            cb.set("- Ninguno -")
+            
+            ec = ctk.CTkEntry(self.events_frame, width=90, justify="center", placeholder_text="(Opcional)")
+            ec.grid(row=i+1, column=1, padx=5, pady=3)
+            
+            ea = ctk.CTkEntry(self.events_frame, width=90, justify="center", placeholder_text="-")
+            ea.grid(row=i+1, column=2, padx=5, pady=3)
+            
+            self.event_entries.append((cb, ec, ea))
+
+        # --- RUTA SOUNDPAD ---
         self.lbl_ruta = ctk.CTkLabel(self.settings_frame, text="📂 Ruta de Soundpad.exe:", font=ctk.CTkFont(weight="bold"))
-        self.lbl_ruta.pack()
+        self.lbl_ruta.pack(pady=(15, 0))
         self.ruta_frame = ctk.CTkFrame(self.settings_frame, fg_color="transparent")
         self.ruta_frame.pack(fill="x", padx=10, pady=(0, 10))
         self.entry_ruta = ctk.CTkEntry(self.ruta_frame, justify="left")
@@ -169,14 +273,16 @@ class Aplicacion(ctk.CTk):
         self.btn_buscar = ctk.CTkButton(self.ruta_frame, text="📁", width=40, command=self.buscar_soundpad)
         self.btn_buscar.pack(side="right")
 
+        # --- ACTIONS ---
         self.btn_cfg = ctk.CTkButton(self, text="⚙️ 1. Instalar CFG en CS2", fg_color="#d35400", hover_color="#e67e22", command=self.instalar_cfg)
         self.btn_cfg.pack(pady=(5, 5), padx=40, fill="x")
         
         self.btn_iniciar = ctk.CTkButton(self, text="🚀 2. INICIAR / GUARDAR", fg_color="#27ae60", hover_color="#2ecc71", font=ctk.CTkFont(size=14, weight="bold"), command=self.iniciar_app)
         self.btn_iniciar.pack(pady=5, padx=40, fill="x")
         
+        # --- LOGS BOX ---
         self.log_box = ctk.CTkTextbox(self, height=120, state="disabled", font=ctk.CTkFont(size=11, family="Consolas"))
-        self.log_box.pack(pady=10, padx=15, fill="both", expand=True)
+        self.log_box.pack(pady=10, padx=15, fill="both")
         self.escribir_log(f"Aplicación {CURRENT_VERSION} lista.")
         
         self.servidor_iniciado = False
@@ -205,15 +311,21 @@ class Aplicacion(ctk.CTk):
                 reglas_guardadas = data.get("reglas", [])
                 for i in range(min(5, len(reglas_guardadas))):
                     r = reglas_guardadas[i]
-                    
                     self.rule_entries[i][0].delete(0, ctk.END)
                     if r.get("kills"): self.rule_entries[i][0].insert(0, r["kills"])
-                    
                     self.rule_entries[i][1].delete(0, ctk.END)
                     if r.get("folder"): self.rule_entries[i][1].insert(0, r["folder"])
-                    
                     self.rule_entries[i][2].delete(0, ctk.END)
                     if r.get("audio"): self.rule_entries[i][2].insert(0, r["audio"])
+                    
+                eventos_guardados = data.get("eventos", [])
+                for i in range(min(4, len(eventos_guardados))):
+                    ev = eventos_guardados[i]
+                    if ev.get("nombre"): self.event_entries[i][0].set(ev["nombre"])
+                    self.event_entries[i][1].delete(0, ctk.END)
+                    if ev.get("folder"): self.event_entries[i][1].insert(0, ev["folder"])
+                    self.event_entries[i][2].delete(0, ctk.END)
+                    if ev.get("audio"): self.event_entries[i][2].insert(0, ev["audio"])
                     
                 self.escribir_log("📂 Configuración anterior cargada.")
             except Exception as e:
@@ -226,12 +338,20 @@ class Aplicacion(ctk.CTk):
                 
             data = {
                 "ruta_soundpad": self.entry_ruta.get(),
-                "reglas": []
+                "reglas": [],
+                "eventos": []
             }
             
             for ek, ec, ea in self.rule_entries:
                 data["reglas"].append({
                     "kills": ek.get().strip(),
+                    "folder": ec.get().strip(),
+                    "audio": ea.get().strip()
+                })
+                
+            for cb, ec, ea in self.event_entries:
+                data["eventos"].append({
+                    "nombre": cb.get(),
                     "folder": ec.get().strip(),
                     "audio": ea.get().strip()
                 })
@@ -303,20 +423,24 @@ class Aplicacion(ctk.CTk):
         ruta_cs2 = filedialog.askdirectory(title="Selecciona la carpeta 'cfg' de CS2 (csgo/cfg)")
         if not ruta_cs2:
             return
-        contenido_cfg = """"Soundpad App"\n{\n    "uri" "http://localhost:3000"\n    "timeout" "5.0"\n    "buffer"  "0.1"\n    "throttle" "0.1"\n    "heartbeat" "10.0"\n    "data"\n    {\n        "provider"            "1"\n        "player_match_stats"  "1"\n    }\n}"""
+        
+        # ACTUALIZADO: Solicitamos más datos a CS2 (map, round, player_state)
+        contenido_cfg = """"Soundpad App"\n{\n    "uri" "http://localhost:3000"\n    "timeout" "5.0"\n    "buffer"  "0.1"\n    "throttle" "0.1"\n    "heartbeat" "10.0"\n    "data"\n    {\n        "provider"            "1"\n        "map"                 "1"\n        "round"               "1"\n        "player_id"           "1"\n        "player_state"        "1"\n        "player_match_stats"  "1"\n    }\n}"""
         try:
             ruta_archivo = os.path.join(ruta_cs2, "gamestate_integration_soundpad.cfg")
             with open(ruta_archivo, "w") as f:
                 f.write(contenido_cfg)
-            self.escribir_log("✅ CFG instalado con éxito.")
+            self.escribir_log("✅ CFG actualizado con nuevos eventos. ¡INSTALADO!")
+            messagebox.showinfo("Éxito", "El archivo CFG se ha instalado correctamente. IMPORTANTE: Reinicia tu juego para que CS2 cargue los nuevos eventos especiales.")
         except Exception as e:
             self.escribir_log(f"❌ Error instalando CFG: {e}")
 
     def iniciar_app(self):
-        global reglas_activas, ruta_soundpad
+        global reglas_activas, eventos_activos, ruta_soundpad
         
         ruta_soundpad = self.entry_ruta.get()
         nuevas_reglas = []
+        nuevos_eventos = {}
         
         for ek, ec, ea in self.rule_entries:
             v_k = ek.get().strip()
@@ -330,19 +454,34 @@ class Aplicacion(ctk.CTk):
                     rc = int(v_c) if v_c else 0
                     nuevas_reglas.append({'kills': rk, 'folder': rc, 'audio': ra})
                 except ValueError:
-                    self.escribir_log("❌ Error: Kills y Audio deben ser números enteros.")
+                    self.escribir_log("❌ Error: Kills y Audio deben ser números.")
                     return
                     
-        if not nuevas_reglas:
-            self.escribir_log("❌ Error: Tienes que rellenar al menos una regla válida.")
+        for cb, ec, ea in self.event_entries:
+            v_nombre = cb.get()
+            v_a = ea.get().strip()
+            v_c = ec.get().strip()
+            
+            if v_nombre != "- Ninguno -" and v_a:
+                try:
+                    ra = int(v_a)
+                    rc = int(v_c) if v_c else 0
+                    nuevos_eventos[v_nombre] = {'folder': rc, 'audio': ra}
+                except ValueError:
+                    self.escribir_log("❌ Error: Nº Carpeta y Nº Audio deben ser números enteros.")
+                    return
+                    
+        if not nuevas_reglas and not nuevos_eventos:
+            self.escribir_log("❌ Error: Configura al menos una kill o un evento.")
             return
             
         nuevas_reglas.sort(key=lambda x: x['kills'], reverse=True)
         reglas_activas = nuevas_reglas
+        eventos_activos = nuevos_eventos
         
         self.guardar_config()
         
-        self.escribir_log(f"✅ {len(reglas_activas)} reglas cargadas.")
+        self.escribir_log(f"✅ {len(reglas_activas)} rachas y {len(eventos_activos)} eventos cargados.")
 
         if not self.servidor_iniciado:
             hilo = threading.Thread(target=ejecutar_servidor, daemon=True)
