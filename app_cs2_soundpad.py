@@ -12,7 +12,7 @@ from flask import Flask, request
 import logging
 from datetime import datetime
 
-CURRENT_VERSION = "v1.7.2"
+CURRENT_VERSION = "v1.7.3"
 REPO = "SanX18/cs2_soundpad_app"
 
 appdata = os.environ.get('APPDATA')
@@ -55,6 +55,8 @@ def log_msg(mensaje):
     if app_instance:
         app_instance.escribir_log(mensaje)
 
+ultimos_tiempos = {}
+
 def reproducir_sonido(carpeta, audio):
     try:
         if carpeta > 0:
@@ -70,7 +72,7 @@ def reproducir_sonido(carpeta, audio):
 
 @servidor_flask.route('/', methods=['POST'])
 def recibir_datos():
-    global estado_anterior, ultimo_payload
+    global estado_anterior, ultimo_payload, ultimos_tiempos
     data = request.get_json()
     
     if not data:
@@ -95,7 +97,6 @@ def recibir_datos():
     bomb = round_data.get('bomb', '')
     round_phase = round_data.get('phase', '')
     
-    # Inicialización la primera vez que recibimos datos
     if estado_anterior['kills'] == -1:
         log_msg(f"📡 Conectado con CS2. Kills actuales: {kills}")
         estado_anterior.update({
@@ -105,7 +106,6 @@ def recibir_datos():
         })
         return 'OK', 200
 
-    # Detección de reinicio de mapa (ej. aim_botz restart)
     if kills < estado_anterior['kills'] or deaths < estado_anterior['deaths']:
         log_msg(f"🔄 Reinicio de mapa detectado. Reseteando estadísticas.")
         estado_anterior.update({
@@ -115,14 +115,11 @@ def recibir_datos():
         })
         return 'OK', 200
 
-    # Detección de nueva ronda para resetear los audios de Kills
     if round_phase != estado_anterior['round_phase'] and round_phase in ['freezetime', 'live']:
-        # Solo reseteamos el offset si realmente estamos en una partida por rondas
         if estado_anterior['round_phase'] != '':
             log_msg("🔄 Nueva ronda. Contador de audios reseteado a 0.")
             estado_anterior['kills_offset_ronda'] = kills
 
-    # ----- PROCESAR KILLS (Ciclos por ronda) -----
     if kills > estado_anterior['kills']:
         kills_ronda = kills - estado_anterior['kills_offset_ronda']
         log_msg(f"💥 ¡Baja detectada! Kills totales: {kills} (En esta ronda: {kills_ronda})")
@@ -137,36 +134,35 @@ def recibir_datos():
                     reproducir_sonido(regla['folder'], regla['audio'])
                     break
                     
-    # ----- PROCESAR EVENTOS ESPECIALES -----
     eventos_ocurridos = []
     
-    if deaths > estado_anterior['deaths']:
-        eventos_ocurridos.append("Muerte")
-    if assists > estado_anterior['assists']:
-        eventos_ocurridos.append("Asistencia")
-    if mvps > estado_anterior['mvps']:
-        eventos_ocurridos.append("MVP")
+    if deaths > estado_anterior['deaths']: eventos_ocurridos.append("Muerte")
+    if assists > estado_anterior['assists']: eventos_ocurridos.append("Asistencia")
+    if mvps > estado_anterior['mvps']: eventos_ocurridos.append("MVP")
         
-    if flashed > 200 and estado_anterior['flashed'] < 200:
+    if flashed > 150 and estado_anterior['flashed'] <= 150:
         eventos_ocurridos.append("Cegado (Flashbang)")
         
     if health < estado_anterior['health'] and health > 0 and estado_anterior['health'] > 0:
         eventos_ocurridos.append("Daño Recibido")
         
     if bomb != estado_anterior['bomb']:
-        if bomb == 'planted':
-            eventos_ocurridos.append("Bomba Plantada")
-        elif bomb == 'exploded':
-            eventos_ocurridos.append("Bomba Explotada")
-        elif bomb == 'defused':
-            eventos_ocurridos.append("Bomba Desactivada")
+        if bomb == 'planted': eventos_ocurridos.append("Bomba Plantada")
+        elif bomb == 'exploded': eventos_ocurridos.append("Bomba Explotada")
+        elif bomb == 'defused': eventos_ocurridos.append("Bomba Desactivada")
             
     if round_phase == 'over' and estado_anterior['round_phase'] != 'over':
         eventos_ocurridos.append("Fin de Ronda")
         
+    ahora = time.time()
     for evento in eventos_ocurridos:
         if evento in eventos_activos:
-            log_msg(f"🌟 Evento Especial: {evento}")
+            # Cooldown de 1.5 segundos (muy importante para evitar que un molotov colapse la app)
+            if ahora - ultimos_tiempos.get(evento, 0) < 1.5:
+                continue
+                
+            ultimos_tiempos[evento] = ahora
+            log_msg(f"🌟 Evento Especial detectado: {evento}")
             regla_evento = eventos_activos[evento]
             reproducir_sonido(regla_evento['folder'], regla_evento['audio'])
 
