@@ -12,7 +12,7 @@ from flask import Flask, request
 import logging
 from datetime import datetime
 
-CURRENT_VERSION = "v1.7.0"
+CURRENT_VERSION = "v1.7.1"
 REPO = "SanX18/cs2_soundpad_app"
 
 appdata = os.environ.get('APPDATA')
@@ -402,13 +402,15 @@ class Aplicacion(ctk.CTk):
 
             my_exe = sys.executable
             
-            bat_content = f"""@echo off\ntimeout /t 2 /nobreak > NUL\ndel "{my_exe}"\ncopy /y "{temp_exe}" "{my_exe}"\nexplorer "{my_exe}"\ndel "%~f0"\n"""
+            # NUEVO SCRIPT BAT CON BUCLE DE ESPERA (RETRY)
+            bat_content = f"""@echo off\n:retry\ntimeout /t 1 /nobreak > NUL\ndel "{my_exe}"\nif exist "{my_exe}" goto retry\ncopy /y "{temp_exe}" "{my_exe}"\nexplorer "{my_exe}"\ndel "%~f0"\n"""
             with open(bat_path, "w") as f:
                 f.write(bat_content)
                 
             self.escribir_log("🚀 Ejecutando instalador y cerrando app vieja...")
-            subprocess.Popen(bat_path, shell=True)
-            sys.exit(0)
+            DETACHED_PROCESS = 0x00000008
+            subprocess.Popen(bat_path, creationflags=DETACHED_PROCESS, shell=True)
+            os._exit(0)
             
         except Exception as e:
             self.escribir_log(f"❌ Error al actualizar: {e}")
