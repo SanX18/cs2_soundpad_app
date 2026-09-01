@@ -12,7 +12,7 @@ from flask import Flask, request
 import logging
 from datetime import datetime
 
-CURRENT_VERSION = "v1.7.3"
+CURRENT_VERSION = "v1.7.5"
 REPO = "SanX18/cs2_soundpad_app"
 
 appdata = os.environ.get('APPDATA')
@@ -79,10 +79,19 @@ def recibir_datos():
         return 'OK', 200
         
     ultimo_payload = data
+    
+    provider = data.get('provider', {})
+    player = data.get('player', {})
+    
+    provider_steamid = provider.get('steamid', '')
+    player_steamid = player.get('steamid', '')
+    
+    # FILTRO MODO ESPECTADOR: Si el SteamID que envía CS2 no es el del jugador en cámara, ignorar.
+    if provider_steamid and player_steamid and provider_steamid != player_steamid:
+        return 'OK', 200
         
     map_data = data.get('map', {})
     round_data = data.get('round', {})
-    player = data.get('player', {})
     match_stats = player.get('match_stats', {})
     state = player.get('state', {})
     
@@ -154,14 +163,9 @@ def recibir_datos():
     if round_phase == 'over' and estado_anterior['round_phase'] != 'over':
         eventos_ocurridos.append("Fin de Ronda")
         
-    ahora = time.time()
     for evento in eventos_ocurridos:
         if evento in eventos_activos:
-            # Cooldown de 1.5 segundos (muy importante para evitar que un molotov colapse la app)
-            if ahora - ultimos_tiempos.get(evento, 0) < 1.5:
-                continue
-                
-            ultimos_tiempos[evento] = ahora
+            # Cooldown eliminado a petición del usuario
             log_msg(f"🌟 Evento Especial detectado: {evento}")
             regla_evento = eventos_activos[evento]
             reproducir_sonido(regla_evento['folder'], regla_evento['audio'])
