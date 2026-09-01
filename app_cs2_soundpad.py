@@ -12,7 +12,7 @@ from flask import Flask, request
 import logging
 from datetime import datetime
 
-CURRENT_VERSION = "v1.7.1"
+CURRENT_VERSION = "v1.7.2"
 REPO = "SanX18/cs2_soundpad_app"
 
 appdata = os.environ.get('APPDATA')
@@ -35,12 +35,14 @@ estado_anterior = {
     'flashed': 0,
     'health': 100,
     'bomb': '',
-    'round_phase': ''
+    'round_phase': '',
+    'kills_offset_ronda': 0
 }
 
 reglas_activas = []
 eventos_activos = {}
 ruta_soundpad = r"C:\Program Files (x86)\Steam\steamapps\common\Soundpad\Soundpad.exe"
+ultimo_payload = {}
 
 def resource_path(relative_path):
     try:
@@ -68,11 +70,13 @@ def reproducir_sonido(carpeta, audio):
 
 @servidor_flask.route('/', methods=['POST'])
 def recibir_datos():
-    global estado_anterior
+    global estado_anterior, ultimo_payload
     data = request.get_json()
     
     if not data:
         return 'OK', 200
+        
+    ultimo_payload = data
         
     map_data = data.get('map', {})
     round_data = data.get('round', {})
@@ -96,7 +100,8 @@ def recibir_datos():
         log_msg(f"📡 Conectado con CS2. Kills actuales: {kills}")
         estado_anterior.update({
             'kills': kills, 'deaths': deaths, 'assists': assists, 'mvps': mvps,
-            'flashed': flashed, 'health': health, 'bomb': bomb, 'round_phase': round_phase
+            'flashed': flashed, 'health': health, 'bomb': bomb, 'round_phase': round_phase,
+            'kills_offset_ronda': kills
         })
         return 'OK', 200
 
@@ -105,16 +110,26 @@ def recibir_datos():
         log_msg(f"🔄 Reinicio de mapa detectado. Reseteando estadísticas.")
         estado_anterior.update({
             'kills': kills, 'deaths': deaths, 'assists': assists, 'mvps': mvps,
-            'flashed': flashed, 'health': health, 'bomb': bomb, 'round_phase': round_phase
+            'flashed': flashed, 'health': health, 'bomb': bomb, 'round_phase': round_phase,
+            'kills_offset_ronda': kills
         })
         return 'OK', 200
 
-    # ----- PROCESAR KILLS (Ciclos) -----
+    # Detección de nueva ronda para resetear los audios de Kills
+    if round_phase != estado_anterior['round_phase'] and round_phase in ['freezetime', 'live']:
+        # Solo reseteamos el offset si realmente estamos en una partida por rondas
+        if estado_anterior['round_phase'] != '':
+            log_msg("🔄 Nueva ronda. Contador de audios reseteado a 0.")
+            estado_anterior['kills_offset_ronda'] = kills
+
+    # ----- PROCESAR KILLS (Ciclos por ronda) -----
     if kills > estado_anterior['kills']:
-        log_msg(f"💥 ¡Baja detectada! Kills totales: {kills}")
-        if reglas_activas:
+        kills_ronda = kills - estado_anterior['kills_offset_ronda']
+        log_msg(f"💥 ¡Baja detectada! Kills totales: {kills} (En esta ronda: {kills_ronda})")
+        
+        if reglas_activas and kills_ronda > 0:
             max_kills_ciclo = max(r['kills'] for r in reglas_activas)
-            kill_en_ciclo = ((kills - 1) % max_kills_ciclo) + 1
+            kill_en_ciclo = ((kills_ronda - 1) % max_kills_ciclo) + 1
             log_msg(f"🔄 Posición en ciclo de rachas (1-{max_kills_ciclo}): Baja nº {kill_en_ciclo}")
             for regla in reglas_activas:
                 if kill_en_ciclo == regla['kills']:
@@ -132,11 +147,9 @@ def recibir_datos():
     if mvps > estado_anterior['mvps']:
         eventos_ocurridos.append("MVP")
         
-    # Flashed: El valor sube a 255 cuando estás ciego y baja poco a poco. Avisamos cuando supera 200
     if flashed > 200 and estado_anterior['flashed'] < 200:
         eventos_ocurridos.append("Cegado (Flashbang)")
         
-    # Daño Recibido (evitamos el daño letal que ya cuenta como "Muerte")
     if health < estado_anterior['health'] and health > 0 and estado_anterior['health'] > 0:
         eventos_ocurridos.append("Daño Recibido")
         
@@ -151,14 +164,12 @@ def recibir_datos():
     if round_phase == 'over' and estado_anterior['round_phase'] != 'over':
         eventos_ocurridos.append("Fin de Ronda")
         
-    # Ejecutar los sonidos de los eventos que han ocurrido
     for evento in eventos_ocurridos:
         if evento in eventos_activos:
             log_msg(f"🌟 Evento Especial: {evento}")
             regla_evento = eventos_activos[evento]
             reproducir_sonido(regla_evento['folder'], regla_evento['audio'])
 
-    # Actualizar estado para la siguiente petición
     estado_anterior.update({
         'kills': kills, 'deaths': deaths, 'assists': assists, 'mvps': mvps,
         'flashed': flashed, 'health': health, 'bomb': bomb, 'round_phase': round_phase
@@ -170,9 +181,9 @@ def ejecutar_servidor():
     log_msg("✅ Servidor escuchando en puerto 3000.")
     servidor_flask.run(port=3000)
 
-def comprobar_actualizaciones():
+def comprobar_actualizaciones(manual=False):
     try:
-        log_msg("🔍 Comprobando si hay actualizaciones...")
+        if manual: log_msg("🔍 Buscando actualizaciones...")
         response = requests.get(f"https://api.github.com/repos/{REPO}/releases/latest", timeout=5)
         response.raise_for_status()
         data = response.json()
@@ -183,9 +194,9 @@ def comprobar_actualizaciones():
                 log_msg(f"✨ ¡Nueva versión encontrada! ({latest_version})")
                 app_instance.after(1000, lambda: app_instance.preguntar_actualizacion(data))
             else:
-                log_msg("✅ Tienes la última versión.")
+                if manual: log_msg("✅ Tienes la última versión.")
         else:
-            log_msg("✅ Tienes la última versión.")
+            if manual: log_msg("✅ Tienes la última versión.")
     except Exception as e:
         log_msg(f"⚠️ No se pudo comprobar actualizaciones: {e}")
 
@@ -196,7 +207,7 @@ class Aplicacion(ctk.CTk):
         app_instance = self
         
         self.title(f"CS2 Soundpad Auto-Caster {CURRENT_VERSION}")
-        self.geometry("480x860")
+        self.geometry("480x950")
         self.resizable(False, False)
         
         try:
@@ -214,7 +225,6 @@ class Aplicacion(ctk.CTk):
         self.settings_frame = ctk.CTkScrollableFrame(self)
         self.settings_frame.pack(pady=10, padx=15, fill="both", expand=True)
         
-        # --- TABLA DE RACHAS (KILLS) ---
         ctk.CTkLabel(self.settings_frame, text="🔫 Rachas de Bajas", font=ctk.CTkFont(weight="bold", size=14)).pack(pady=(5, 0))
         self.rows_frame = ctk.CTkFrame(self.settings_frame, fg_color="transparent")
         self.rows_frame.pack(fill="x", pady=5, padx=10)
@@ -237,7 +247,6 @@ class Aplicacion(ctk.CTk):
             
             self.rule_entries.append((ek, ec, ea))
             
-        # --- TABLA DE EVENTOS ESPECIALES ---
         ctk.CTkLabel(self.settings_frame, text="🌟 Eventos Especiales", font=ctk.CTkFont(weight="bold", size=14)).pack(pady=(15, 0))
         self.events_frame = ctk.CTkFrame(self.settings_frame, fg_color="transparent")
         self.events_frame.pack(fill="x", pady=5, padx=10)
@@ -262,7 +271,6 @@ class Aplicacion(ctk.CTk):
             
             self.event_entries.append((cb, ec, ea))
 
-        # --- RUTA SOUNDPAD ---
         self.lbl_ruta = ctk.CTkLabel(self.settings_frame, text="📂 Ruta de Soundpad.exe:", font=ctk.CTkFont(weight="bold"))
         self.lbl_ruta.pack(pady=(15, 0))
         self.ruta_frame = ctk.CTkFrame(self.settings_frame, fg_color="transparent")
@@ -273,23 +281,35 @@ class Aplicacion(ctk.CTk):
         self.btn_buscar = ctk.CTkButton(self.ruta_frame, text="📁", width=40, command=self.buscar_soundpad)
         self.btn_buscar.pack(side="right")
 
-        # --- ACTIONS ---
         self.btn_cfg = ctk.CTkButton(self, text="⚙️ 1. Instalar CFG en CS2", fg_color="#d35400", hover_color="#e67e22", command=self.instalar_cfg)
         self.btn_cfg.pack(pady=(5, 5), padx=40, fill="x")
         
         self.btn_iniciar = ctk.CTkButton(self, text="🚀 2. INICIAR / GUARDAR", fg_color="#27ae60", hover_color="#2ecc71", font=ctk.CTkFont(size=14, weight="bold"), command=self.iniciar_app)
-        self.btn_iniciar.pack(pady=5, padx=40, fill="x")
+        self.btn_iniciar.pack(pady=(5, 10), padx=40, fill="x")
         
-        # --- LOGS BOX ---
+        self.btn_debug = ctk.CTkButton(self, text="🐛 Ver Log Interno (GSI)", fg_color="#34495e", hover_color="#2c3e50", command=self.volcar_log)
+        self.btn_debug.pack(pady=(0, 5), padx=40, fill="x")
+        
+        self.btn_actualizar = ctk.CTkButton(self, text="🔄 Buscar Actualización Manual", fg_color="#8e44ad", hover_color="#9b59b6", command=lambda: comprobar_actualizaciones(manual=True))
+        self.btn_actualizar.pack(pady=(0, 5), padx=40, fill="x")
+        
         self.log_box = ctk.CTkTextbox(self, height=120, state="disabled", font=ctk.CTkFont(size=11, family="Consolas"))
         self.log_box.pack(pady=10, padx=15, fill="both")
         self.escribir_log(f"Aplicación {CURRENT_VERSION} lista.")
         
         self.servidor_iniciado = False
-        
         self.cargar_config()
-        
         threading.Thread(target=comprobar_actualizaciones, daemon=True).start()
+
+    def volcar_log(self):
+        try:
+            ruta = os.path.join(tempfile.gettempdir(), 'cs2_gsi_log_debug.json')
+            with open(ruta, 'w', encoding='utf-8') as f:
+                json.dump(ultimo_payload, f, indent=4)
+            os.startfile(ruta)
+            self.escribir_log("✅ Archivo JSON de Debug abierto.")
+        except Exception as e:
+            self.escribir_log(f"❌ Error abriendo log: {e}")
 
     def escribir_log(self, mensaje):
         hora = datetime.now().strftime("%H:%M:%S")
@@ -359,7 +379,7 @@ class Aplicacion(ctk.CTk):
             with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=4)
                 
-            self.escribir_log("💾 Configuración guardada correctamente.")
+            self.escribir_log("💾 Configuración guardada.")
         except Exception as e:
             self.escribir_log(f"⚠️ Error guardando config: {e}")
 
@@ -402,7 +422,6 @@ class Aplicacion(ctk.CTk):
 
             my_exe = sys.executable
             
-            # NUEVO SCRIPT BAT CON BUCLE DE ESPERA (RETRY)
             bat_content = f"""@echo off\n:retry\ntimeout /t 1 /nobreak > NUL\ndel "{my_exe}"\nif exist "{my_exe}" goto retry\ncopy /y "{temp_exe}" "{my_exe}"\nexplorer "{my_exe}"\ndel "%~f0"\n"""
             with open(bat_path, "w") as f:
                 f.write(bat_content)
@@ -426,13 +445,12 @@ class Aplicacion(ctk.CTk):
         if not ruta_cs2:
             return
         
-        # ACTUALIZADO: Solicitamos más datos a CS2 (map, round, player_state)
         contenido_cfg = """"Soundpad App"\n{\n    "uri" "http://localhost:3000"\n    "timeout" "5.0"\n    "buffer"  "0.1"\n    "throttle" "0.1"\n    "heartbeat" "10.0"\n    "data"\n    {\n        "provider"            "1"\n        "map"                 "1"\n        "round"               "1"\n        "player_id"           "1"\n        "player_state"        "1"\n        "player_match_stats"  "1"\n    }\n}"""
         try:
             ruta_archivo = os.path.join(ruta_cs2, "gamestate_integration_soundpad.cfg")
             with open(ruta_archivo, "w") as f:
                 f.write(contenido_cfg)
-            self.escribir_log("✅ CFG actualizado con nuevos eventos. ¡INSTALADO!")
+            self.escribir_log("✅ CFG actualizado. ¡Reinicia CS2 para aplicar los cambios!")
             messagebox.showinfo("Éxito", "El archivo CFG se ha instalado correctamente. IMPORTANTE: Reinicia tu juego para que CS2 cargue los nuevos eventos especiales.")
         except Exception as e:
             self.escribir_log(f"❌ Error instalando CFG: {e}")
@@ -470,7 +488,7 @@ class Aplicacion(ctk.CTk):
                     rc = int(v_c) if v_c else 0
                     nuevos_eventos[v_nombre] = {'folder': rc, 'audio': ra}
                 except ValueError:
-                    self.escribir_log("❌ Error: Nº Carpeta y Nº Audio deben ser números enteros.")
+                    self.escribir_log("❌ Error: Nº Carpeta y Nº Audio deben ser enteros.")
                     return
                     
         if not nuevas_reglas and not nuevos_eventos:
@@ -482,7 +500,6 @@ class Aplicacion(ctk.CTk):
         eventos_activos = nuevos_eventos
         
         self.guardar_config()
-        
         self.escribir_log(f"✅ {len(reglas_activas)} rachas y {len(eventos_activos)} eventos cargados.")
 
         if not self.servidor_iniciado:
