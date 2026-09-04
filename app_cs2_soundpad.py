@@ -13,7 +13,7 @@ import logging
 from datetime import datetime
 import random
 
-CURRENT_VERSION = "v1.8.0"
+CURRENT_VERSION = "v1.8.1"
 REPO = "SanX18/cs2_soundpad_app"
 
 appdata = os.environ.get('APPDATA')
@@ -89,8 +89,8 @@ def recibir_datos():
     provider_steamid = provider.get('steamid', '')
     player_steamid = player.get('steamid', '')
     
-    # ¿Estamos en modo espectador? (Viendo a otro jugador)
-    es_espectador = bool(provider_steamid and player_steamid and provider_steamid != player_steamid)
+    # ¿Estamos en modo espectador? (Validar que el paquete sea realmente tuyo)
+    es_espectador = (provider_steamid != player_steamid)
         
     bomb = round_data.get('bomb', '')
     round_phase = round_data.get('phase', '')
@@ -117,8 +117,12 @@ def recibir_datos():
 
     # --- 2. PROCESAR ESTADO PERSONAL SOLO SI SOMOS NOSOTROS MISMOS ---
     if not es_espectador:
-        match_stats = player.get('match_stats', {})
-        state = player.get('state', {})
+        # Ignorar paquetes incompletos (ej. pantallas de carga)
+        if 'match_stats' not in player or 'state' not in player:
+            return 'OK', 200
+            
+        match_stats = player['match_stats']
+        state = player['state']
         
         kills = match_stats.get('kills', 0)
         deaths = match_stats.get('deaths', 0)
@@ -165,7 +169,10 @@ def recibir_datos():
                         reproducir_sonido(regla['folder'], audio_elegido)
                         break
                         
-        if deaths > estado_anterior['deaths']: eventos_ocurridos.append("Muerte")
+        if deaths > estado_anterior['deaths']:
+            if round_phase == 'live' or health == 0:
+                eventos_ocurridos.append("Muerte")
+                
         if assists > estado_anterior['assists']: eventos_ocurridos.append("Asistencia")
         if mvps > estado_anterior['mvps']: eventos_ocurridos.append("MVP")
         if flashed > 150 and estado_anterior['flashed'] <= 150: eventos_ocurridos.append("Cegado (Flashbang)")
